@@ -1,0 +1,13 @@
+gymnasium==1.2.1
+matplotlib==3.10.6
+numpy==2.3.2
+pandas==2.3.2
+pandas-market-calendars==5.1.1
+scipy==1.16.1
+seaborn==0.13.2
+statsmodels==0.14.5
+streamlit==1.51.0
+torch==2.8.0
+tqdm==4.67.1
+yfinance==0.2.65
+tensorboard==2.20.0

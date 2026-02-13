@@ -87,7 +87,7 @@ class DualityHQOperator:
     
     def update_sinkhorn_radius(self, cost:torch.Tensor) -> torch.Tensor:
         """
-        Updates the Sinkhorn radius (epsilon) to correct for entropic bias. This mainly acts as a validity constraint to tnesure that the entropy bias corrected sinkhorn radius is valid.
+        Updates the Sinkhorn radius (epsilon) to correct for entropic bias. This mainly acts as a validity constraint to ensure that the entropy bias corrected sinkhorn radius is valid.
         Essentially, this cannot be negative as a negative radius does not make sense in the context of a Sinkhorn ball.
         
         Inputs:
@@ -220,3 +220,4 @@ def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor,
         hq_value = dual_obj(lamda_star)
     
     return hq_value, lamda_star, n_iter
+    

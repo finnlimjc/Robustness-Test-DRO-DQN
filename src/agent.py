@@ -48,7 +48,7 @@ class ReplayBuffer:
         Inputs:
             state: Tensor of shape [batch_size, state_dim].
             action: Tensor of shape [batch_size, action_dim].
-            reward: Tensor of shape [batch_size, 1].
+            reward: Tensor of shape [batch_size, 1]. Note that this is the reward from the environment.
             next_state: Tensor of shape [batch_size, state_dim].
             terminal_state: Tensor of shape [batch_size, 1].
             lambda_val: Tensor of shape [batch_size, 1].
@@ -281,6 +281,7 @@ class PORDQN(AgentInterface):
         row_indices = torch.arange(self.batch_size, device=self.device) #(batch_size,)
         current_state_q = self.q(current_states)[row_indices, actions.squeeze().to(torch.int64)]
         
+        # Compute loss only on valid samples if mask is provided else compute on all samples
         if (~lamda_mask).any():
             loss = self.loss_fn(current_state_q[lamda_mask], hq_values[lamda_mask])
         else:
@@ -295,9 +296,41 @@ class PORDQN(AgentInterface):
         self.hq_optimizer.step()
         return loss
     
+    def log_indicators(self, rewards:torch.Tensor, next_states:torch.Tensor, not_terminal:torch.Tensor, targets:torch.Tensor, lambda_iters:int, lambdas:torch.Tensor, mask:torch.Tensor):
+        """
+        Log Lagrangian Lambda and HQ descriptive statistics to TensorBoard.
+        
+        Inputs:
+            rewards: Tensor of shape [batch_size].
+            next_states: Tensor of shape [batch_size, state_dim].
+            not_terminal: Boolean tensor of shape [batch_size].
+            targets: Tensor of shape [batch_size].
+            lambda_iters: Number of iterations taken for lambda optimization.
+            lambdas: Tensor of shape [batch_size].
+            mask: Boolean tensor of shape [batch_size] indicating valid samples.
+        """
+        
+        with torch.no_grad():
+            discount_rate = self.duality_operator.discount_rate # Scalar
+            target_q_vals = self.target_q(next_states).max(dim=-1).values # (batch_size,)
+            standard_q_targets = rewards + discount_rate * target_q_vals * not_terminal # (batch_size,)
+            q_hq_diff = standard_q_targets - targets
+            
+            if self.writer is not None:
+                self.writer.add_scalar('Lambda/iterations', lambda_iters, self.q_updates)
+                self.writer.add_scalar('Lambda/max lambda', lambdas.max(), self.q_updates)
+                self.writer.add_scalar('Lambda/min lambda', lambdas.min(), self.q_updates)
+                self.writer.add_scalar('Lambda/median lambda', torch.median(lambdas), self.q_updates)
+                self.writer.add_scalar('Lambda/ebar_neg', (~mask).sum(), self.q_updates)
+                self.writer.add_scalar('HQ/Min_HQ_delta', q_hq_diff.min(), self.q_updates)
+                self.writer.add_scalar('HQ/Max_HQ_delta', q_hq_diff.max(), self.q_updates)
+                self.writer.add_scalar('HQ/Mean_HQ_delta', q_hq_diff.mean(), self.q_updates)
+                self.writer.add_scalar('HQ/mean_HQ_values', targets.mean(), self.q_updates)
+    
     def train_batch(self, states:torch.Tensor, actions:torch.Tensor, rewards:torch.Tensor, next_state:torch.Tensor, terminal_states:torch.Tensor, lambda_vals:torch.Tensor, risk_free_rates:torch.Tensor, transaction_costs:torch.Tensor, buffer_idx:torch.Tensor):
         """
         Takes in a batch of experience from the replay buffer and performs a training step on the Q-network.
+        For entropic bias-corrected sinkhorn distance, we exclude the ones that are implausible (negative distance).
         
         Inputs:
             states: Tensor of shape [batch_size, state_dim].
@@ -321,7 +354,7 @@ class PORDQN(AgentInterface):
             q_targets = self.q(target_state) # (batch_size, n_samples, action_dim)
             optimal_q_targets = q_targets.max(dim=-1).values # (batch_size, n_samples)
             
-            # Entropy bias-corrected sinkhorn radius calculation
+            # Entropy bias-corrected sinkhorn radius calculation and inclusion of valid samples
             cost = self.duality_operator.compute_cost(reference_return, next_return_from_prior) # (batch_size, n_samples)
             epsilon_bar = self.duality_operator.update_sinkhorn_radius(cost) # (batch_size)
             mask = epsilon_bar.gt(0) # (batch_size)
@@ -334,7 +367,7 @@ class PORDQN(AgentInterface):
         self._cache_lambdas(lamda_star, buffer_idx, mask)
         
         if self.writer is not None:
-            pass
+            self.log_indicators(rewards, next_state, not_terminal, hq_value, n_iter, lamda_star, mask)
         
         return loss
     

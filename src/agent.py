@@ -104,7 +104,27 @@ class ReplayBuffer:
 
 class PORDQN(AgentInterface):
     """
-    INSERT DESCRIPTION HERE
+    Portfolio Optimisation Robust Deep Q-Network (PORDQN).
+
+    PORDQN implements a robust Q-learning agent that replaces the standard Bellman target with a duality-based HQ operator under distributional
+    ambiguity. The agent evaluates actions under a prior return distribution and computes robust targets using entropy bias-corrected Sinkhorn
+    distances. The agent is designed for portfolio allocation problems where uncertainty in future returns is explicitly modelled via a 
+    prior measure and a Wasserstein-type ambiguity set.
+    
+    Training Procedure for each sampled batch:
+        1. Sample future returns from the prior distribution.
+        2. Construct candidate next states conditioned on sampled returns.
+        3. Compute rewards accounting for asset returns, risk-free allocation and transaction costs.
+        4. Evaluate target Q-values.
+        5. Compute Sinkhorn ambiguity radius and filter invalid samples.
+        6. Optimise λ using the HQ operator neural optimisation routine.
+        7. Use HQ values as robust TD targets to update the Q-network.
+    
+    Notes:
+        1. Designed for single-asset trading where the buffer action dimension is fixed to one.
+        2. Sinkhorn radius filtering removes implausible samples caused by entropy bias correction.
+        3. Uses epsilon-greedy exploration during training when epsilon > 0.
+        4. State contains a 60-day history of past returns, current portfolio return, current position and the time step information.
     
     Inputs:
         state_dim: Dimension of the state space.
@@ -112,10 +132,16 @@ class PORDQN(AgentInterface):
         batch_size: Batch size for training.
         n_updates: Number of update steps to perform when training.
         training_controller: TrainingController object to manage training steps and target network cloning, imported from agent_interface.py.
+        prior_measure: A prior distribution object representing the prior distribution over returns, imported from prior_measure.py.
+        duality_operator: A DualityHQOperator object that implements the HQ operator and Sinkhorn distance calculations, imported from robust.py.
         epsilon: Epsilon value for exploration, default is 0.0 which means epsilon-greedy is disabled.
+        lamda_init: Initial value for lambda in the HQ optimization, default is 1.0.
         qfunc: Q-network (if None, a default network will be created).
         hq_optimizer: Optimizer for the HQ value optimization (if None, a default Adam optimizer will be created).
+        hq_lr: Learning rate for the HQ optimizer if hq_optimizer is None, default is 1e-4.
         device: Device to run the network on, such as 'cuda' or 'cpu'.
+        buffer_max_length: Maximum length of the replay buffer, default is 1e6.
+        writer: TensorBoard SummaryWriter for logging (optional).
     """
     def __init__(self, state_dim:int, action_dim:int, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 

@@ -9,14 +9,15 @@ from src.robust import *
 
 class ReplayBuffer:
     """
-    Replay buffer to store experience tuples for training the agent.
+    Replay buffer to store experience tuples for training the agent. 
+    Memory is stored in the CPU to prevent excessive memory overhead.
     
     Inputs:
         state_dim: Dimension of the state space.
         action_dim: Dimension of the action space.
         batch_size: Batch size for sampling.
         max_len: Maximum length of the replay buffer.
-        device: Torch device to store the tensors, such as "cuda" or "cpu".
+        device: Training torch device such as "cuda" or "cpu", if "cuda", pin_memory is set to True for faster transfer from CPU to GPU. 
     """
     def __init__(self, state_dim:int, action_dim:int, batch_size:int, max_len:int=1e6, device:torch.device=None):
         self.state_dim = state_dim
@@ -25,21 +26,50 @@ class ReplayBuffer:
         self.max_len = int(max_len)
         self.device = torch.device('cpu') if device is None else device
         
+        self.buffer_device = torch.device('cpu')
+        self.pin_memory = (self.device.type == 'cuda')
+        
         self.reset()
     
     def reset(self):
         self.circular_ptr = 0
         self.size = 0
+        self.batch_arange = torch.arange(self.batch_size, device=self.buffer_device)
         
-        self.state = torch.empty((self.max_len, self.state_dim), dtype=torch.float32, device=self.device)
-        self.action = torch.empty((self.max_len, self.action_dim), device=self.device)
-        self.reward = torch.empty((self.max_len, 1), dtype=torch.float32, device=self.device)
-        self.next_state = torch.empty((self.max_len, self.state_dim), dtype=torch.float32, device=self.device)
-        self.terminal_state = torch.empty((self.max_len, 1), dtype=torch.bool, device=self.device)
-        self.lambda_val = torch.empty((self.max_len, 1), dtype=torch.float32, device=self.device)
-        self.risk_free_rate = torch.empty((self.max_len, 1), dtype=torch.float32, device=self.device)
-        self.transaction_cost = torch.empty((self.max_len, 1), dtype=torch.float32, device=self.device)
+        self.state = torch.empty((self.max_len, self.state_dim), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.action = torch.empty((self.max_len, self.action_dim), dtype=torch.int64, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.reward = torch.empty((self.max_len), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.next_state = torch.empty((self.max_len, self.state_dim), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.terminal_state = torch.empty((self.max_len), dtype=torch.bool, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.lambda_val = torch.empty((self.max_len), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.risk_free_rate = torch.empty((self.max_len), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+        self.transaction_cost = torch.empty((self.max_len), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
+    
+    def _to_cpu(self, item:torch.Tensor) -> torch.Tensor:
+        """
+        Assumes item is GPU tensor.
+        """
+        item = item.detach().contiguous() #contiguous handles strided tensors
+        return item.to(self.buffer_device)
+    
+    def _to_gpu(self, item:torch.Tensor) -> torch.Tensor:
+        """
+        Assumes item is CPU tensor and training device is GPU.
+        """
+        item = item.detach().contiguous() #contiguous handles strided tensors
+        return item.to(self.device, non_blocking=True)
+    
+    def _device_transfer(self, item:torch.Tensor, target_device:torch.device) -> torch.Tensor:
+        if item.device == target_device:
+            return item
         
+        if target_device.type == 'cuda':
+            return self._to_gpu(item)
+        elif target_device.type == 'cpu':
+            return self._to_cpu(item)
+        else:
+            raise ValueError(f"Invalid Device: {target_device.type}. Device should either be 'cuda' or 'cpu'.")
+    
     def add(self, state:torch.Tensor, action:torch.Tensor, reward:torch.Tensor, next_state:torch.Tensor, terminal_state:torch.Tensor, 
             lambda_val:torch.Tensor, risk_free_rate:torch.Tensor, transaction_cost:torch.Tensor):
         """
@@ -48,29 +78,31 @@ class ReplayBuffer:
         Inputs:
             state: Tensor of shape [batch_size, state_dim].
             action: Tensor of shape [batch_size, action_dim].
-            reward: Tensor of shape [batch_size, 1]. Note that this is the reward from the environment.
+            reward: Tensor of shape [batch_size]. Note that this is the reward from the environment.
             next_state: Tensor of shape [batch_size, state_dim].
-            terminal_state: Tensor of shape [batch_size, 1].
-            lambda_val: Tensor of shape [batch_size, 1].
-            risk_free_rate: Tensor of shape [batch_size, 1].
-            transaction_cost: Tensor of shape [batch_size, 1].
+            terminal_state: Tensor of shape [batch_size].
+            lambda_val: Tensor of shape [batch_size].
+            risk_free_rate: Tensor of shape [batch_size].
+            transaction_cost: Tensor of shape [batch_size].
         """
+        target_device = self.buffer_device
+        
         # Add batch data to buffer
-        circular_idx = (self.circular_ptr + torch.arange(self.batch_size)) % self.max_len
-        self.state[circular_idx] = state
-        self.action[circular_idx] = action
-        self.reward[circular_idx] = reward
-        self.next_state[circular_idx] = next_state
-        self.terminal_state[circular_idx] = terminal_state
-        self.lambda_val[circular_idx] = lambda_val
-        self.risk_free_rate[circular_idx] = risk_free_rate
-        self.transaction_cost[circular_idx] = transaction_cost
+        circular_idx = (self.circular_ptr + self.batch_arange) % self.max_len
+        self.state[circular_idx] = self._device_transfer(state, target_device)
+        self.action[circular_idx] = self._device_transfer(action, target_device)
+        self.reward[circular_idx] = self._device_transfer(reward, target_device)
+        self.next_state[circular_idx] = self._device_transfer(next_state, target_device)
+        self.terminal_state[circular_idx] = self._device_transfer(terminal_state, target_device)
+        self.lambda_val[circular_idx] = self._device_transfer(lambda_val, target_device)
+        self.risk_free_rate[circular_idx] = self._device_transfer(risk_free_rate, target_device)
+        self.transaction_cost[circular_idx] = self._device_transfer(transaction_cost, target_device)
         
         # Update circular pointer and size
         self.circular_ptr = (self.circular_ptr + self.batch_size) % self.max_len
         self.size = min(self.size + self.batch_size, self.max_len)
     
-    def sample(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def sample(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Randomly sample a batch from the replay buffer. Note that if you have n updates, you should call this n times to get different samples.
         
@@ -86,18 +118,26 @@ class ReplayBuffer:
                 transaction_cost: Tensor of shape [batch_size].
                 idx: Tensor of shape [batch_size], indices of the sampled experiences in the buffer.
         """
-        idx = torch.randint(0, self.size, (self.batch_size,), device=self.device)
-        return (
-            self.state[idx],
-            self.action[idx],
-            self.reward[idx].view(-1),
-            self.next_state[idx],
-            self.terminal_state[idx].view(-1),
-            self.lambda_val[idx].view(-1),
-            self.risk_free_rate[idx].view(-1),
-            self.transaction_cost[idx].view(-1),
-            idx
+        target_device = self.device
+        
+        idx = torch.randint(0, self.size, (self.batch_size,), device=self.buffer_device)
+        state = self._device_transfer(self.state[idx], target_device)
+        action = self._device_transfer(self.action[idx], target_device)
+        reward = self._device_transfer(self.reward[idx], target_device)
+        next_state = self._device_transfer(self.next_state[idx], target_device)
+        terminal_state = self._device_transfer(self.terminal_state[idx], target_device)
+        lambda_val = self._device_transfer(self.lambda_val[idx], target_device)
+        risk_free_rate = self._device_transfer(self.risk_free_rate[idx], target_device)
+        transaction_cost = self._device_transfer(self.transaction_cost[idx], target_device)
+        
+        idx = self._device_transfer(idx, target_device)
+        result = (
+            state, action, reward,
+            next_state, terminal_state, lambda_val, 
+            risk_free_rate, transaction_cost, idx
         )
+        
+        return result
     
     def __len__(self):
         return self.size
@@ -283,11 +323,14 @@ class PORDQN(AgentInterface):
         return reward
     
     def _cache_lambdas(self, lamdas:torch.Tensor, buffer_idx:torch.Tensor, mask:torch.Tensor):
-        valid_idx = buffer_idx[mask]
-        if lamdas.ndim == 1:
-            self.buffer.lambda_val[valid_idx] = lamdas[mask].unsqueeze(-1)
+        buffer_ready_lamdas = self.buffer._device_transfer(lamdas, self.buffer.buffer_device)
+        buffer_ready_mask = self.buffer._device_transfer(mask, self.buffer.buffer_device)
+        valid_idx = buffer_idx[buffer_ready_mask]
+        
+        if lamdas.ndim == 1 and lamdas.shape[0] == self.batch_size:
+            self.buffer.lambda_val[valid_idx] = buffer_ready_lamdas[buffer_ready_mask] #(batch_size)
         elif lamdas.ndim == 2 and lamdas.shape[1] == 1:
-            self.buffer.lambda_val[valid_idx] = lamdas[mask]
+            self.buffer.lambda_val[valid_idx] = buffer_ready_lamdas[buffer_ready_mask].squeeze(-1) #(batch_size)
         else:
             raise ValueError("lamdas must be of shape (batch_size,) or (batch_size, 1)")
     
@@ -412,9 +455,27 @@ class PORDQN(AgentInterface):
         '''
         risk_free_rate = info.get('risk_free_rate', 0.0)
         transaction_cost = info.get('transaction_cost', 0.0)
-        terminal_tensor = torch.full((self.batch_size, 1), is_terminal, dtype=torch.bool, device=self.device)
-        risk_free_rate_tensor = torch.full((self.batch_size, 1), risk_free_rate, dtype=torch.float32, device=self.device)
-        transaction_cost_tensor = torch.full((self.batch_size, 1), transaction_cost, dtype=torch.float32, device=self.device)
+        
+        terminal_tensor = torch.full(
+            (self.batch_size, ),
+            is_terminal,
+            dtype=torch.bool,
+            device=self.device
+        )
+        
+        # Handle numpy arrays and scalar values through reshape and expand
+        risk_free_rate_tensor = torch.as_tensor(
+            risk_free_rate,
+            dtype=torch.float32,
+            device=self.device
+        ).reshape(-1).expand(self.batch_size)
+
+        transaction_cost_tensor = torch.as_tensor(
+            transaction_cost,
+            dtype=torch.float32,
+            device=self.device
+        ).reshape(-1).expand(self.batch_size)
+
         return terminal_tensor, risk_free_rate_tensor, transaction_cost_tensor
     
     def train_mode_actions(self, reward:torch.Tensor|np.ndarray|float, observation:torch.Tensor|np.ndarray, is_terminal:bool=False, info=None):
@@ -428,7 +489,7 @@ class PORDQN(AgentInterface):
             info: Additional info (not used here).
         '''
         self.training_controller.step_increment()
-        lamda_init = torch.full((self.batch_size, 1), self.lamda_init, dtype=torch.float32, device=self.device)
+        lamda_init = torch.full((self.batch_size, ), self.lamda_init, dtype=torch.float32, device=self.device)
         terminal_tensor, risk_free_rate_tensor, transaction_cost_tensor = self._handle_terminal_state_and_info(is_terminal, info)
         self.buffer.add(self.prev_state, self.prev_action, reward, observation, terminal_tensor, lamda_init, risk_free_rate_tensor, transaction_cost_tensor)
         sufficient_samples = self.training_controller.has_samples(len(self.buffer))

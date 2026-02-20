@@ -18,25 +18,27 @@ class AgentInterface:
         self.prev_action = action
         return action # Size depends on get_action()
     
-    def agent_step(self, reward:torch.Tensor|np.ndarray|float, observation:torch.Tensor|np.ndarray, is_terminal:bool=False, info=None) -> torch.Tensor:
+    def agent_step(self, reward:torch.Tensor|np.ndarray|float, observation:torch.Tensor|np.ndarray, info=None) -> torch.Tensor:
+        IS_TERMINAL = False
         observation = check_modify_obs(observation)
         reward = check_modify_reward(reward)
         action = self.get_action(observation)
         
         if self.training_mode:
-            self.train_mode_actions(reward, observation, is_terminal, info)
+            self.train_mode_actions(reward, observation, IS_TERMINAL, info)
         
         # Update previous state and action
         self.prev_state = observation
         self.prev_action = action
         return action # Size depends on get_action()
     
-    def agent_end(self, reward:torch.Tensor|np.ndarray|float, observation:torch.Tensor|np.ndarray, is_terminal:bool=False, info=None):
+    def agent_end(self, reward:torch.Tensor|np.ndarray|float, observation:torch.Tensor|np.ndarray, info=None):
+        IS_TERMINAL = True
         observation = check_modify_obs(observation)
         reward = check_modify_reward(reward)
         
         if self.training_mode: 
-            self.train_mode_actions(reward, observation, is_terminal, info)
+            self.train_mode_actions(reward, observation, IS_TERMINAL, info)
     
     # ---- Implement by child class ----
     def get_action(self, observation:torch.Tensor|np.ndarray) -> torch.Tensor:

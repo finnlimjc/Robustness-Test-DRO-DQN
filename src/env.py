@@ -98,6 +98,9 @@ class PortfolioEnv(gym.Env):
         return next_state
     
     def _check_action(self, action:torch.Tensor) -> np.ndarray:
+        if action.is_cuda:
+            action = action.cpu()
+        
         if action.ndim == 1:
             if action.shape[0] == self.batch_size:
                 action = action.unsqueeze(-1) #(batch_size, 1)
@@ -153,7 +156,7 @@ class PortfolioEnv(gym.Env):
         # Initialize Agent State
         self.position = np.zeros((self.batch_size, 1), dtype=np.float32)
         self.log_wealth = np.zeros((self.batch_size, 1), dtype=np.float32)
-    
+        
         # Initialize Simulation State
         self.curr_step = self.state_len
         self.seq = self._simulate(self.seed) # (batch_size, total_steps)
@@ -176,7 +179,7 @@ class PortfolioEnv(gym.Env):
         Outputs:
             next_state: the next state of shape (batch_size, state_len).
             reward: the reward of shape (batch_size, 1)
-            done: whether the episode is done.
+            done: whether the episode is done (batch_size, 1).
             truncated: False for the truncated input requirement of a gym environemnt.
             info: the info dictionary that contains interest and transaction cost information.
         '''
@@ -190,7 +193,10 @@ class PortfolioEnv(gym.Env):
         
         # Update Info
         self.log_wealth += reward
-        info = (interest, transaction_cost)
+        info = {
+            'risk_free_rate': interest,
+            'transaction_cost': transaction_cost
+        }
         
         # Update Step
         next_state = self._get_state()

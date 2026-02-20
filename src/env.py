@@ -212,7 +212,7 @@ class PortfolioEnv(gym.Env):
         if self.logging:
             self.episode_actions.append(action)
             self.episode_rewards.append(reward)
-            self.episode_log_returns.append(next_state[:,(self.state_len-1)*self.seq_dim:self.state_len*self.seq_dim])
+            self.episode_log_returns.append(next_state[:,(self.state_len-1):self.state_len])
         
         self.env_step_check = {
             'next_state': next_state,

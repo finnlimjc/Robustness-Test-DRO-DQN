@@ -19,7 +19,7 @@ class ReplayBuffer:
         max_len: Maximum length of the replay buffer.
         device: Training torch device such as "cuda" or "cpu", if "cuda", pin_memory is set to True for faster transfer from CPU to GPU. 
     """
-    def __init__(self, state_dim:int, action_dim:int, batch_size:int, max_len:int=1e6, device:torch.device=None):
+    def __init__(self, state_dim:int, action_dim:int, batch_size:int, max_len:int=1e6, device:torch.device=None, seed:int=None):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.batch_size = batch_size
@@ -28,13 +28,17 @@ class ReplayBuffer:
         
         self.buffer_device = torch.device('cpu')
         self.pin_memory = (self.device.type == 'cuda')
+        self.batch_arange = torch.arange(self.batch_size, device=self.buffer_device)
         
-        self.reset()
+        self.reset(seed)
     
-    def reset(self):
+    def reset(self, seed:int=None):
         self.circular_ptr = 0
         self.size = 0
-        self.batch_arange = torch.arange(self.batch_size, device=self.buffer_device)
+        
+        self.generator = torch.Generator(device=self.buffer_device)
+        if seed is not None:
+            self.generator.manual_seed(seed)
         
         self.state = torch.empty((self.max_len, self.state_dim), dtype=torch.float32, device=self.buffer_device, pin_memory=self.pin_memory)
         self.action = torch.empty((self.max_len, self.action_dim), dtype=torch.int64, device=self.buffer_device, pin_memory=self.pin_memory)
@@ -120,7 +124,7 @@ class ReplayBuffer:
         """
         target_device = self.device
         
-        idx = torch.randint(0, self.size, (self.batch_size,), device=self.buffer_device)
+        idx = torch.randint(0, self.size, (self.batch_size,), device=self.buffer_device, generator=self.generator)
         state = self._device_transfer(self.state[idx], target_device)
         action = self._device_transfer(self.action[idx], target_device)
         reward = self._device_transfer(self.reward[idx], target_device)
@@ -177,16 +181,18 @@ class PORDQN(AgentInterface):
         epsilon: Epsilon value for exploration, default is 0.0 which means epsilon-greedy is disabled.
         lamda_init: Initial value for lambda in the HQ optimization, default is 1.0.
         qfunc: Q-network (if None, a default network will be created).
+        network_optimizer: Optimizer for the Deep Q-Network (if None, a default Adam optimizer will be created).
+        network_lr: Learning rate for the network optimizer, if network_optimizer is not None, this is redundant.
         hq_optimizer: Optimizer for the HQ value optimization (if None, a default Adam optimizer will be created).
-        hq_lr: Learning rate for the HQ optimizer if hq_optimizer is None, default is 1e-4.
+        hq_lr: Learning rate for the HQ optimizer, if hq_optimizer is not None, this is redundant.
         device: Device to run the network on, such as 'cuda' or 'cpu'.
         buffer_max_length: Maximum length of the replay buffer, default is 1e6.
         writer: TensorBoard SummaryWriter for logging (optional).
     """
     def __init__(self, state_dim:int, action_dim:int, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
-                 epsilon:float=0.0, lamda_init:float=1.0, qfunc:torch.nn.Module=None, 
-                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=1e-4, device:torch.device=None, buffer_max_length:int=1e6, writer=None):
+                 epsilon:float=0.0, lamda_init:float=1.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
+                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.1, device:torch.device=None, buffer_max_length:int=1e6, writer=None, seed:int=None):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -217,13 +223,27 @@ class PORDQN(AgentInterface):
         self.q.to(self.device)
         self.target_q.to(self.device)
         
+        # Reproduce Results
+        self.generator = torch.Generator(device=self.device)
+        if seed is not None:
+            self.generator.manual_seed(seed)
+            self.seed = seed
+            self.buffer_seed = seed + 1 #Seed is offset to prevent hidden correlations
+        
+        # Buffer
         self.buffer_action_dim = 1  # Fixed action dimension to 1 as we are using epsilon greedy and trading one asset.
-        self.buffer = ReplayBuffer(self.state_dim, self.buffer_action_dim, self.batch_size, buffer_max_length, self.device)
-        self.hq_optimizer = torch.optim.Adam(self.q.parameters(), lr=hq_lr) if hq_optimizer is None else hq_optimizer
+        self.buffer = ReplayBuffer(self.state_dim, self.buffer_action_dim, self.batch_size, buffer_max_length, self.device, seed=self.buffer_seed) 
+        
+        # Loss Functions
+        self.network_optimizer = torch.optim.Adam(self.q.parameters(), lr=network_lr) if network_optimizer is None else network_optimizer
+        self.hq_optimizer = hq_optimizer
+        self.hq_lr = hq_lr
         self.loss_fn = nn.MSELoss()
         self.clip_gradients = True
         
+        # Logging Purposes
         self.writer = writer
+        self.q_updates = 0
         
     def get_action(self, observation:torch.Tensor|np.ndarray) -> torch.Tensor:
         """
@@ -246,7 +266,7 @@ class PORDQN(AgentInterface):
                 total_explorers = is_epsilon_greedy.sum()
                 if total_explorers > 0:
                     shape = (total_explorers, 1)
-                    actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long) # Random action for explorers
+                    actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long, generator=self.generator) # Random action for explorers
             
             return actions # (Batch, 1)
     
@@ -288,6 +308,7 @@ class PORDQN(AgentInterface):
         Update the Q-network by performing n_updates training steps. Note that train_batch() inputs are sampled from the buffer.
         """
         for update in range(self.n_updates):
+            self.q_updates += 1
             states, actions, rewards, next_state, terminal_states, lambda_vals, risk_free_rates, transaction_costs, buffer_idx = self.buffer.sample()
             self.train_batch(states, actions, rewards, next_state, terminal_states, lambda_vals, risk_free_rates, transaction_costs, buffer_idx)
     
@@ -356,13 +377,13 @@ class PORDQN(AgentInterface):
         else:
             loss = self.loss_fn(current_state_q, hq_values)
         
-        self.hq_optimizer.zero_grad()
+        self.network_optimizer.zero_grad()
         loss.backward()
         
         if self.clip_gradients:
             torch.nn.utils.clip_grad_value_(self.q.parameters(), 1.0)
         
-        self.hq_optimizer.step()
+        self.network_optimizer.step()
         return loss
     
     def log_indicators(self, rewards:torch.Tensor, next_states:torch.Tensor, not_terminal:torch.Tensor, targets:torch.Tensor, lambda_iters:int, lambdas:torch.Tensor, mask:torch.Tensor):
@@ -430,7 +451,7 @@ class PORDQN(AgentInterface):
             if epsilon_bar.lt(0).any():
                 print("Warning: Sinkhorn radius is negative for some batches.")
             
-        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask)
+        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask, optimizer=self.hq_optimizer, lr=self.hq_lr)
         
         loss = self.compute_loss_and_update(states, actions, hq_value, mask)
         self._cache_lambdas(lamda_star, buffer_idx, mask)

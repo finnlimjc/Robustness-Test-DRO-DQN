@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-
 class LagrangianLambdaScheduler:
     def __init__(self, optimizer, step_size, gamma, init_lr, init_lamda=None):
         self.optimizer = optimizer

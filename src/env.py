@@ -20,7 +20,7 @@ class PortfolioEnv(gym.Env):
         logging: whether to log the episode data for plotting function
     '''
     
-    def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.0005, 
+    def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.005, 
                  state_len:int=60, batch_size:int=8, logging:bool=False, seed:int=None):
         
         super().__init__()
@@ -180,6 +180,8 @@ class PortfolioEnv(gym.Env):
             truncated: False for the truncated input requirement of a gym environemnt.
             info: the info dictionary that contains interest and transaction cost information.
         '''
+        if not (hasattr(self, 'position') and hasattr(self, 'log_wealth')):
+            raise AttributeError('Please use reset() to initialize environment.')
         
         # Take Action and Calculate Reward
         action = self._check_action(action)

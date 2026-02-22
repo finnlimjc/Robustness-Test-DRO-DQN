@@ -43,11 +43,11 @@ class Config:
             )
 
 class PORDQNProgressWriter:
-    def __init__(self, model_name:str, overwrite_existing_file:bool=True):
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    def __init__(self, model_name:str, timestamp_folder_name:str=None, overwrite_existing_checkpoint_file:bool=True):
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if timestamp_folder_name is None else timestamp_folder_name
         self.base_file_path = os.path.join("runs", model_name, self.timestamp)
         self.checkpoint_dir = os.path.join(self.base_file_path, 'checkpoints')
-        os.makedirs(self.checkpoint_dir, exist_ok=overwrite_existing_file)
+        os.makedirs(self.checkpoint_dir, exist_ok=overwrite_existing_checkpoint_file)
         
         self.writer = SummaryWriter(self.base_file_path)
     
@@ -96,6 +96,14 @@ class PORDQNProgressWriter:
         return checkpoint
     
     def save_model_params_periodically(self, epoch:int, agent, checkpoint_interval:int=1000):
+        """
+        Checks agent training steps, if it is a multiple of checkpoint_interval, a checkpoint save will be attempted.
+        
+        Inputs:
+            epoch: Current training episode.
+            agent: PORDQN agent with a TrainingController object.
+            checkpoint_interval: n-th training step to attempt a checkpoint save.
+        """
         steps = agent.training_controller.steps
         if steps % checkpoint_interval == 0:
             checkpoint = self._build_checkpoint(epoch, agent)
@@ -155,6 +163,7 @@ class PORDQNProgressWriter:
         atomic_torch_save(checkpoint, latest_path)
     
     def close_writer(self):
+        self.writer.flush()
         self.writer.close()
 
 class LoadModel:

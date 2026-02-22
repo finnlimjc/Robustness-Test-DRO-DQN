@@ -6,6 +6,7 @@ from copy import deepcopy
 from src.agent_interface import *
 from src.prior_measure import *
 from src.robust import *
+from src.util import PORDQNProgressWriter
 
 class ReplayBuffer:
     """
@@ -191,8 +192,8 @@ class PORDQN(AgentInterface):
     """
     def __init__(self, state_dim:int, action_dim:int, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
-                 epsilon:float=0.0, lamda_init:float=1.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
-                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.1, device:torch.device=None, buffer_max_length:int=1e6, writer=None, seed:int=None):
+                 epsilon:float=0.1, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
+                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, device:torch.device=None, buffer_max_length:int=1e6, writer:PORDQNProgressWriter=None, seed:int=None):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -220,8 +221,8 @@ class PORDQN(AgentInterface):
         
         self.device = torch.device('cpu') if device is None else device
         self.target_q = deepcopy(self.q)
-        self.q.to(self.device)
-        self.target_q.to(self.device)
+        self.q = self.q.to(self.device)
+        self.target_q = self.target_q.to(self.device)
         
         # Reproduce Results
         self.generator = torch.Generator(device=self.device)
@@ -268,7 +269,7 @@ class PORDQN(AgentInterface):
                     shape = (total_explorers, 1)
                     actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long, generator=self.generator) # Random action for explorers
             
-            return actions # (Batch, 1)
+        return actions # (Batch, 1)
     
     def prepare_target_states(self, state:torch.Tensor, action:torch.Tensor, next_return_from_prior:torch.Tensor, sampled_states:torch.Tensor, realized_return:torch.Tensor) -> torch.Tensor:
         """
@@ -383,6 +384,9 @@ class PORDQN(AgentInterface):
         if self.clip_gradients:
             torch.nn.utils.clip_grad_value_(self.q.parameters(), 1.0)
         
+        if self.writer is not None:
+            self.writer.log_network_updates(self.q, loss, self.q_updates)
+        
         self.network_optimizer.step()
         return loss
     
@@ -394,7 +398,7 @@ class PORDQN(AgentInterface):
             rewards: Tensor of shape [batch_size].
             next_states: Tensor of shape [batch_size, state_dim].
             not_terminal: Boolean tensor of shape [batch_size].
-            targets: Tensor of shape [batch_size].
+            targets: HQ Tensor of shape [batch_size].
             lambda_iters: Number of iterations taken for lambda optimization.
             lambdas: Tensor of shape [batch_size].
             mask: Boolean tensor of shape [batch_size] indicating valid samples.
@@ -406,16 +410,7 @@ class PORDQN(AgentInterface):
             standard_q_targets = rewards + discount_rate * target_q_vals * not_terminal # (batch_size,)
             q_hq_diff = standard_q_targets - targets
             
-            if self.writer is not None:
-                self.writer.add_scalar('Lambda/iterations', lambda_iters, self.q_updates)
-                self.writer.add_scalar('Lambda/max lambda', lambdas.max(), self.q_updates)
-                self.writer.add_scalar('Lambda/min lambda', lambdas.min(), self.q_updates)
-                self.writer.add_scalar('Lambda/median lambda', torch.median(lambdas), self.q_updates)
-                self.writer.add_scalar('Lambda/ebar_neg', (~mask).sum(), self.q_updates)
-                self.writer.add_scalar('HQ/Min_HQ_delta', q_hq_diff.min(), self.q_updates)
-                self.writer.add_scalar('HQ/Max_HQ_delta', q_hq_diff.max(), self.q_updates)
-                self.writer.add_scalar('HQ/Mean_HQ_delta', q_hq_diff.mean(), self.q_updates)
-                self.writer.add_scalar('HQ/mean_HQ_values', targets.mean(), self.q_updates)
+            self.writer.log_hq_progress(lambda_iters, lambdas, mask, self.q_updates, q_hq_diff, targets)
     
     def train_batch(self, states:torch.Tensor, actions:torch.Tensor, rewards:torch.Tensor, next_state:torch.Tensor, terminal_states:torch.Tensor, lambda_vals:torch.Tensor, risk_free_rates:torch.Tensor, transaction_costs:torch.Tensor, buffer_idx:torch.Tensor):
         """

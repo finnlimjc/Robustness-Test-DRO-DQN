@@ -144,7 +144,7 @@ class DualObjective(nn.Module):
     def forward(self, lamda:torch.Tensor):
         lamda_plus = self.softplus(lamda) #(batch_size)
         cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
-        cij = self.duality_operator.compute_cij(self.prior_r, self.q_max, self.not_terminal, lamda, cost) #(batch_size, n_samples)
+        cij = self.duality_operator.compute_cij(self.prior_r, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
         inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size)
         hq_value = self.duality_operator.hq_value(lamda_plus, inner_exp) #(batch_size)
         return hq_value
@@ -160,7 +160,7 @@ class OptimizeLamda:
         step_size: Step size for the learning rate scheduler.
         gamma: Decay factor for the learning rate scheduler.
     """
-    def __init__(self, dual_objective:DualObjective, lr:float=0.1, max_iter:int=1000, step_size:int=100, gamma:float=0.1):
+    def __init__(self, dual_objective:DualObjective, lr:float, max_iter:int, step_size:int, gamma:float):
         self.dual_objective = dual_objective
         self.lr = lr
         self.max_iter = max_iter
@@ -210,7 +210,12 @@ class OptimizeLamda:
 
 def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 
                    lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
-                   lr:float=0.1, max_iter:int=1000, step_size:int=100, gamma:float=0.1) -> torch.Tensor:
+                   lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0) -> torch.Tensor:
+    """
+    HQ Optimizer by optimizing the Lagrangian Lambda using a neural network and a scheduler.
+    This is called per update step which happens at each time step for n episodes.
+    Therefore, this resets to the original state at each time step.
+    """
     
     dual_obj = DualObjective(duality_operator, reference_r, prior_r, q_max, not_terminal)
     opt = OptimizeLamda(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma)

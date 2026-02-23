@@ -13,14 +13,14 @@ def check_modify_obs(observation:torch.Tensor|np.ndarray) -> torch.Tensor:
     """
     #Convert to tensor of type float
     if isinstance(observation, np.ndarray):
-        observation = torch.tensor(observation, dtype=torch.float32)
+        observation = torch.from_numpy(observation).float()
     elif isinstance(observation, torch.Tensor):
         observation = observation.float()
     else:
         raise ValueError(f'Invalid observation type: {type(observation)}')
     
     if observation.ndim == 1:
-        observation = observation.unsqueeze(-1) #Add batch dimension (Batch, Features)
+        observation = observation.unsqueeze(0) #Add batch dimension (Batch, Features)
     
     elif observation.ndim > 2:
         batch_size = observation.shape[0] #Assume first dimension is batch
@@ -44,7 +44,7 @@ def check_modify_reward(reward:torch.Tensor|np.ndarray|float) -> torch.Tensor:
     if isinstance(reward, float):
         reward = torch.tensor([reward], dtype=torch.float32)
     elif isinstance(reward, np.ndarray):
-        reward = torch.tensor(reward, dtype=torch.float32)
+        reward = torch.from_numpy(reward).float()
     elif isinstance(reward, torch.Tensor):
         reward = reward.float()
     else:

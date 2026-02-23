@@ -16,14 +16,17 @@ class PortfolioEnv(gym.Env):
         rf_rate: the risk-free interest rate for continuous compounding
         trans_cost: the transaction cost and a percentage of the transaction amount
         state_len: total days of past returns to use for state
-        batch_size: number of independent trading environments
+        batch_size: number of independent trading environments, for out-of-sample evaluation, set this to be 1.
         logging: whether to log the episode data for plotting function
     '''
     
     def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.005, 
-                 state_len:int=60, batch_size:int=8, logging:bool=False, seed:int=None):
+                 state_len:int=60, batch_size:int=8, logging:bool=False, seed:int=None, use_simulation:bool=True):
         
         super().__init__()
+        
+        if not use_simulation and batch_size != 1:
+            print("If you are not using the simulated data, it is recommended to set the batch_size to be 1.")
         
         # Market Info
         self.asset_log_returns = asset_log_returns.copy()
@@ -38,6 +41,7 @@ class PortfolioEnv(gym.Env):
         self.batch_size = batch_size
         self.logging = logging
         
+        self.use_simulation = use_simulation
         self._init_action_space()
         self._init_obs_space()
         self._init_calendar()
@@ -71,7 +75,7 @@ class PortfolioEnv(gym.Env):
         
         t = np.zeros(len(schedule))
         t[1:] = years_between.values.cumsum() #Years in Continuous Space
-        self.dts = np.diff(t, prepend=0) #For Interest Rate Compounding
+        self.dts = np.diff(t) #For Interest Rate Compounding
         self.total_steps = len(self.dts)
         self.action_steps = self.total_steps - self.state_len #Number of steps where action can be taken
     
@@ -111,7 +115,7 @@ class PortfolioEnv(gym.Env):
     
     def _get_reward(self, action:np.ndarray, log_return:np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Compute the reward for a given portfolio action based on asset and risk-free returns.
+        Compute the reward (log(1+R)) for a given portfolio action based on asset and risk-free returns.
         
         Inputs:
             action: Array of shape (batch_size, 1) representing the new portfolio weight allocated to the risky asset. The remaining (1 - action) is held as cash.
@@ -129,12 +133,12 @@ class PortfolioEnv(gym.Env):
         
         # Asset Return
         asset_return = np.exp(log_return) - 1.0
-        weighted_return = action * asset_return # ()
+        weighted_return = action * asset_return # (batch_size, 1)
         
         change_in_weight = action - self.position # (batch_size, 1)
         transaction_cost = self.trans_cost* np.abs(change_in_weight) # (batch_size, 1)
         
-        total_simple_return = 1.0 + weighted_interest + weighted_return - transaction_cost
+        total_simple_return = 1.0 + weighted_interest + weighted_return - transaction_cost #(1+R)
         reward = np.log(total_simple_return) # (batch_size, 1)
                 
         # Check to ensure that no values are nan
@@ -159,7 +163,12 @@ class PortfolioEnv(gym.Env):
         
         # Initialize Simulation State
         self.curr_step = self.state_len
-        self.seq = self._simulate(self.seed) # (batch_size, total_steps)
+        
+        if self.use_simulation:
+            self.seq = self._simulate(self.seed) # (batch_size, total_steps)
+        else:
+            self.seq = self.asset_log_returns.reshape(1, -1) #(1, total_steps)
+        
         next_state = self._get_state()
         
         if self.logging:

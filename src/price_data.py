@@ -5,12 +5,15 @@ import yfinance as yf
 class YahooFinance:
     def __init__(self, symbol:str, start_date:str, end_date:str, interval:str='1d'):
         self.symbol = symbol
-        self.start_date = start_date
-        self.end_date = end_date
+        self.start_date = pd.Timestamp(start_date)
+        self.end_date = pd.Timestamp(end_date)
         self.interval = interval
         self.col_names = ["date", "price", "normalized_price", 'log_price', 'log_return']
     
     def _download_data(self, symbol:str|list[str], start_date:str, end_date:str, interval:str='1d') -> pd.DataFrame:
+        #Yahoo finance excludes end date if interval is daily
+        if interval.endswith("d"):
+            end_date = end_date + pd.Timedelta(days=1)
         prices = yf.download(symbol, start=start_date, end=end_date, interval=interval, auto_adjust=False)
         prices.index = prices.index.date
         return prices

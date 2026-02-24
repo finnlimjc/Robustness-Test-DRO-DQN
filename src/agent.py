@@ -193,7 +193,7 @@ class PORDQN(AgentInterface):
     def __init__(self, state_dim:int, action_dim:int, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
                  epsilon:float=0.1, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
-                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, device:torch.device=None, buffer_max_length:int=1e6, writer:PORDQNProgressWriter=None, seed:int=None):
+                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, writer:PORDQNProgressWriter=None, seed:int=None):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -237,14 +237,19 @@ class PORDQN(AgentInterface):
         
         # Loss Functions
         self.network_optimizer = torch.optim.Adam(self.q.parameters(), lr=network_lr) if network_optimizer is None else network_optimizer
-        self.hq_optimizer = hq_optimizer
-        self.hq_lr = hq_lr
         self.loss_fn = nn.MSELoss()
         self.clip_gradients = True
         
+        # HQ Optimization
+        self.hq_optimizer = hq_optimizer
+        self.hq_lr = hq_lr
+        self.hq_max_iter = hq_max_iter
+        self.hq_step_size = hq_step_size
+        self.hq_gamma = hq_gamma
+        
         # Logging Purposes
         self.writer = writer
-        self.q_updates = 0
+        self.q_updates = 0 #Increment every update, so time_step*n_updates
         
     def get_action(self, observation:torch.Tensor|np.ndarray) -> torch.Tensor:
         """
@@ -446,14 +451,15 @@ class PORDQN(AgentInterface):
             if epsilon_bar.lt(0).any():
                 print("Warning: Sinkhorn radius is negative for some batches.")
             
-        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask, optimizer=self.hq_optimizer, lr=self.hq_lr)
+        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask, optimizer=self.hq_optimizer, lr=self.hq_lr, max_iter=self.hq_max_iter, step_size=self.hq_step_size, gamma=self.hq_gamma)
         
         loss = self.compute_loss_and_update(states, actions, hq_value, mask)
         self._cache_lambdas(lamda_star, buffer_idx, mask)
         
         if self.writer is not None:
             self.log_indicators(rewards, next_state, not_terminal, hq_value, n_iter, lamda_star, mask)
-        
+            self.writer.log_policy_action(actions, self.q_updates, decimal_places=1)
+            
         return loss
     
     def _handle_terminal_state_and_info(self, is_terminal:bool, info:dict=None):

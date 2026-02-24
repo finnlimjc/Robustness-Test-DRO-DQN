@@ -1,4 +1,5 @@
 import json
+import numpy as np
 import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -155,6 +156,40 @@ class PORDQNProgressWriter:
         
         total_norm = self._calculate_gradient(qfunc)
         self.writer.add_scalar("Network/gradient", total_norm.item(), q_updates)
+    
+    def _calculate_simpson_index(self, actions:np.ndarray, decimal_places:int) -> float:
+        """
+        Calculates the Simpson Dominance Index of an infinite community that measures concentration of actions.
+        Values approaching 1 indicate strong policy concentration.
+        
+        Inputs:
+            actions: An array of discrete/continuous actions taken by the agent. The format does not matter as only the values will be taken.
+            decimal_places: Number of decimal places to round to. This allows us to handle both discrete and continuous actions through np.unique().
+            
+        Outputs:
+            simpson_index: A float that ranges from 0 to 1 where 1 indicates that one or two actions dominate.
+        """
+        if torch.is_tensor(actions):
+            actions = actions.detach().cpu().numpy()
+        if not isinstance(actions, np.ndarray):
+            raise TypeError(f"Expected a numpy array, received: {type(actions)}")
+        if actions.size == 0:
+            raise ValueError(f"There should be at least one action. Your input: {actions}")
+        
+        one_dim_actions = actions.ravel().astype(np.float32)
+        one_dim_actions = np.round(one_dim_actions, decimal_places)
+        _, counts = np.unique(one_dim_actions, return_counts=True)
+        p = counts/counts.sum()
+        p = p[p>0] #Avoid zero bins
+        
+        simpson_index = np.sum(p**2)
+        return simpson_index
+    
+    def log_policy_action(self, actions:np.ndarray, q_updates:int, decimal_places:int=1):
+        simpson_index = self._calculate_simpson_index(actions, decimal_places)
+        epsilon = 1e-12 #Prevent explosion
+        reciprocal_simpson = 1/(simpson_index + epsilon)#Number of unique actions where 1.13 means that 1 action dominates
+        self.writer.add_scalar('Network/effective_actions', reciprocal_simpson, q_updates)
     
     def save_latest_model_params(self, epoch:int, agent, file_name:str=None):
         file_name = f"checkpoint_ep{epoch}.pt" if file_name is None else file_name

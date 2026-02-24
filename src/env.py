@@ -111,6 +111,10 @@ class PortfolioEnv(gym.Env):
         
         action = action.to(torch.int32) #Index Integer
         action = self.action_values[action] #Get Index Value
+        
+        if isinstance(action, float):
+            action = np.array([[action]]) #(1, 1)
+        
         return action
     
     def _get_reward(self, action:np.ndarray, log_return:np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

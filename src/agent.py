@@ -174,6 +174,7 @@ class PORDQN(AgentInterface):
     Inputs:
         state_dim: Dimension of the state space.
         action_dim: Dimension of the action space.
+        action_values: Discrete actions obtained using np.linspace() or through the dedicated environment (PortfolioEnv.action_values).
         batch_size: Batch size for training.
         n_updates: Number of update steps to perform when training.
         training_controller: TrainingController object to manage training steps and target network cloning, imported from agent_interface.py.
@@ -190,22 +191,29 @@ class PORDQN(AgentInterface):
         buffer_max_length: Maximum length of the replay buffer, default is 1e6.
         writer: TensorBoard SummaryWriter for logging (optional).
     """
-    def __init__(self, state_dim:int, action_dim:int, batch_size:int, n_updates:int,
+    def __init__(self, state_dim:int, action_dim:int, action_values:np.ndarray, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
                  epsilon:float=0.1, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
                  hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, writer:PORDQNProgressWriter=None, seed:int=None):
         super().__init__()
+        
+        # Device
+        self.device = torch.device('cpu') if device is None else device
+        
+        # Training Parameters
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.action_values = self._modify_action_values(action_values)
         self.batch_size = batch_size
         self.n_updates = n_updates
+        self.epsilon = epsilon
+        
+        # Objects
         self.training_controller = training_controller
         self.prior_measure = prior_measure
         self.duality_operator = duality_operator
-        self.epsilon = epsilon
-        self.lamda_init = lamda_init
         
-        #Initialize Networks
+        # Initialize Networks
         self.q = qfunc
         if qfunc is None:
             if self.state_dim is None:
@@ -219,7 +227,6 @@ class PORDQN(AgentInterface):
                 nn.Linear(64, self.action_dim)
             )
         
-        self.device = torch.device('cpu') if device is None else device
         self.target_q = deepcopy(self.q)
         self.q = self.q.to(self.device)
         self.target_q = self.target_q.to(self.device)
@@ -241,6 +248,7 @@ class PORDQN(AgentInterface):
         self.clip_gradients = True
         
         # HQ Optimization
+        self.lamda_init = lamda_init
         self.hq_optimizer = hq_optimizer
         self.hq_lr = hq_lr
         self.hq_max_iter = hq_max_iter
@@ -250,7 +258,15 @@ class PORDQN(AgentInterface):
         # Logging Purposes
         self.writer = writer
         self.q_updates = 0 #Increment every update, so time_step*n_updates
-        
+    
+    def _modify_action_values(self, action_values:np.ndarray):
+        if isinstance(action_values, np.ndarray):
+            return torch.from_numpy(action_values).to(self.device, dtype=torch.float32)
+        elif torch.is_tensor(action_values):
+            return action_values.to(self.device, dtype=torch.float32)
+        else:
+            raise TypeError(f"Expected a numpy array for action values. Received: {type(action_values)}")
+    
     def get_action(self, observation:torch.Tensor|np.ndarray) -> torch.Tensor:
         """
         Get action from the agent given an observation. Uses epsilon-greedy exploration if enabled by setting epsilon > 0.
@@ -331,7 +347,6 @@ class PORDQN(AgentInterface):
         Outputs:
             rewards: Tensor of shape [batch_size, action_dim, n_samples] representing the rewards for each sampled next return.
         """
-        
         #Match Shapes
         modified_next_return_from_prior = next_return_from_prior.unsqueeze(1).expand(-1, self.action_dim, -1) # (batch_size, action_dim, n_samples)
         modified_action = action.unsqueeze(-1) # (batch_size, action_dim, 1)
@@ -344,7 +359,6 @@ class PORDQN(AgentInterface):
         
         cash_weight = 1.0 - modified_action # (batch_size, action_dim, 1)
         weighted_cash_return = cash_weight * modified_risk_free_rate # (batch_size, action_dim, 1)
-        
         simple_return_after_transaction = (weighted_asset_return + weighted_cash_return - modified_transaction_cost) + 1.0 # (batch_size, action_dim, n_samples)
         reward = simple_return_after_transaction.log() # (batch_size, action_dim, n_samples)
         return reward
@@ -375,7 +389,7 @@ class PORDQN(AgentInterface):
             loss: Computed loss value.
         """
         row_indices = torch.arange(self.batch_size, device=self.device) #(batch_size,)
-        current_state_q = self.q(current_states)[row_indices, actions.squeeze().to(torch.int64)]
+        current_state_q = self.q(current_states)[row_indices, actions.squeeze().to(torch.int64)] #Select all rows and argmax actions
         
         # Compute loss only on valid samples if mask is provided else compute on all samples
         if (~lamda_mask).any():
@@ -435,13 +449,15 @@ class PORDQN(AgentInterface):
         """
         not_terminal = torch.logical_not(terminal_states)
         with torch.no_grad():
+            action_weight = self.action_values[actions.squeeze(-1)].unsqueeze(-1) # (batch_size, 1)
+            
             # Prior component
             next_return_from_prior = self.prior_measure.sample_from_support(self.batch_size) # (batch_size, n_samples)
-            rewards_from_prior = self.reward_fn(actions, next_return_from_prior, risk_free_rates, transaction_costs) # (batch_size, action_dim, n_samples)
+            rewards_from_prior = self.reward_fn(action_weight, next_return_from_prior, risk_free_rates, transaction_costs) # (batch_size, action_dim, n_samples)
             
             # Q-learning component
-            target_state, reference_return = self.prepare_target_states(states, actions, next_return_from_prior, next_state, realized_return=rewards_from_prior) # (batch_size, n_samples, state_dim)
-            q_targets = self.q(target_state) # (batch_size, n_samples, action_dim)
+            target_state, reference_return = self.prepare_target_states(states, action_weight, next_return_from_prior, next_state, realized_return=rewards_from_prior) # (batch_size, n_samples, state_dim)
+            q_targets = self.target_q(target_state) # (batch_size, n_samples, action_dim)
             optimal_q_targets = q_targets.max(dim=-1).values # (batch_size, n_samples)
             
             # Entropy bias-corrected sinkhorn radius calculation and inclusion of valid samples
@@ -458,7 +474,7 @@ class PORDQN(AgentInterface):
         
         if self.writer is not None:
             self.log_indicators(rewards, next_state, not_terminal, hq_value, n_iter, lamda_star, mask)
-            self.writer.log_policy_action(actions, self.q_updates, decimal_places=1)
+            self.writer.log_policy_action(action_weight, self.q_updates, decimal_places=1)
             
         return loss
     

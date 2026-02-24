@@ -13,7 +13,7 @@ class PriorStudentDistribution:
         ddof: Degrees of freedom of the student-t distribution.
         device: Torch device to store the tensors, such as "cuda" or "cpu".
     """
-    def __init__(self, n_samples:int=5000, mu:float=0.0, scale:float=0.03, ddof:int=2, device:torch.device=None):
+    def __init__(self, n_samples:int=1000, mu:float=0.0, scale:float=0.03, ddof:int=2, device:torch.device=None):
         self.n_samples = int(n_samples)
         self.mu = mu 
         self.scale = scale

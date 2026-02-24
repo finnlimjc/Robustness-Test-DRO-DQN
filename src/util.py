@@ -79,6 +79,7 @@ class PORDQNProgressWriter:
             "target_q_network": agent.target_q.state_dict(),
             "network_optimizer": agent.network_optimizer.state_dict(),
             "network_rng": agent.generator.get_state() if hasattr(agent, 'generator') else None,
+            "action_values": agent.action_values,
             
             #Buffer
             "prev_state": agent.prev_state,
@@ -252,6 +253,7 @@ class LoadModel:
         agent.q.load_state_dict(checkpoint['q_network'])
         agent.target_q.load_state_dict(checkpoint['target_q_network'])
         agent.network_optimizer.load_state_dict(checkpoint['network_optimizer'])
+        agent.action_values = checkpoint["action_values"]
         
         #Buffer
         agent.prev_state = checkpoint['prev_state']

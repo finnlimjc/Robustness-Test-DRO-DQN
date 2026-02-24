@@ -51,10 +51,13 @@ class DualityHQOperator:
         Outputs:
             cij: Exponential term used in the inner expectation, shape of (batch_size, n_samples).
         """
+        if torch.isnan(prior_reward).any() or torch.isinf(prior_reward).any():
+            raise ValueError(f"Numerical instability in prior_reward, max: {prior_reward.max()}, min: {prior_reward.min()}")
+        assert prior_reward.shape[1] == 1, "Current implementation for Prior Reward only accept trading of one asset, expect size of (batch_size, 1, n_samples)"
+        
         # Prevent silent broadcasting errors
         not_terminal = not_terminal.unsqueeze(-1) #(batch_size, 1)
         lamda = lamda.unsqueeze(-1) #(batch_size, 1)
-        assert prior_reward.shape[1] == 1, "Current implementation for Prior Reward only accept trading of one asset, expect size of (batch_size, 1, n_samples)"
         prior_reward = prior_reward.squeeze(1)
         
         discounted_return = prior_reward + self.discount_rate*q_max*not_terminal # (batch_size, n_samples)

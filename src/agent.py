@@ -451,7 +451,7 @@ class PORDQN(AgentInterface):
             if epsilon_bar.lt(0).any():
                 print("Warning: Sinkhorn radius is negative for some batches.")
             
-        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask, optimizer=self.hq_optimizer, lr=self.hq_lr, max_iter=self.hq_max_iter, step_size=self.hq_step_size, gamma=self.hq_gamma)
+        hq_value, lamda_star, n_iter = hq_opt_with_nn(self.duality_operator, reference_return, next_return_from_prior, rewards_from_prior, optimal_q_targets, not_terminal, lambda_vals, mask, optimizer=self.hq_optimizer, lr=self.hq_lr, max_iter=self.hq_max_iter, step_size=self.hq_step_size, gamma=self.hq_gamma)
         
         loss = self.compute_loss_and_update(states, actions, hq_value, mask)
         self._cache_lambdas(lamda_star, buffer_idx, mask)

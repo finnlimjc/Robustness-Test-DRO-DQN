@@ -37,12 +37,12 @@ class DualityHQOperator:
         
         return cost #(batch_size, n_samples)
     
-    def compute_cij(self, prior_r:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, lamda:torch.Tensor, cost:torch.Tensor) -> torch.Tensor:
+    def compute_cij(self, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, lamda:torch.Tensor, cost:torch.Tensor) -> torch.Tensor:
         """
         Calculates the exponential term cij used in the inner expectation of the HQ operator.
         
         Inputs:
-            prior_r: Returns sampled from the support of the prior distribution, expected shape of (batch_size, n_samples).
+            prior_reward: Returns sampled from the support of the prior distribution fed into the reward function, expected shape of (batch_size, action_dim, n_samples).
             q_max: Maximum Q-values for the sampled next states, expected shape of (batch_size, n_samples).
             not_terminal: Tensor indicating whether the next state is terminal, expected shape of (batch_size).
             lamda: Lagrangian multiplier lambda for the HQ operator, expected shape of (batch_size).
@@ -54,8 +54,10 @@ class DualityHQOperator:
         # Prevent silent broadcasting errors
         not_terminal = not_terminal.unsqueeze(-1) #(batch_size, 1)
         lamda = lamda.unsqueeze(-1) #(batch_size, 1)
+        assert prior_reward.shape[1] == 1, "Current implementation for Prior Reward only accept trading of one asset, expect size of (batch_size, 1, n_samples)"
+        prior_reward = prior_reward.squeeze(1)
         
-        discounted_return = prior_r + self.discount_rate*q_max*not_terminal # (batch_size, n_samples)
+        discounted_return = prior_reward + self.discount_rate*q_max*not_terminal # (batch_size, n_samples)
         first_second_term = - discounted_return / (self.delta * lamda)
         third_term = cost/self.delta #lambda cancels out for the third term
         cij = first_second_term - third_term
@@ -124,6 +126,7 @@ class DualObjective(nn.Module):
         duality_operator: DualityHQOperator object to compute components of the HQ operator.
         reference_r: Returns sampled from the next_state in the buffer, note that we only need the returns not the full state, expected shape of (batch_size, 1).
         prior_r: Returns sampled from the support of the prior distribution, expected shape of (batch_size, n_samples).
+        prior_reward: Reward of prior_r, expected shape of # (batch_size, action_dim, n_samples).
         q_max: Maximum Q-values for the sampled next states, expected shape of (batch_size, n_samples).
         not_terminal: Tensor indicating whether the next state is terminal, expected shape of (batch_size).
         norm_order: Order of the norm to compute cost, where 1 is L1 norm and 2 is L2 norm.
@@ -131,11 +134,12 @@ class DualObjective(nn.Module):
     Outputs:
         hq_value: HQ value, shape of (batch_size).
     """
-    def __init__(self, duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor):
+    def __init__(self, duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor):
         super().__init__()
         self.duality_operator = duality_operator
         self.reference_r = reference_r
         self.prior_r = prior_r
+        self.prior_reward = prior_reward
         self.q_max = q_max
         self.not_terminal = not_terminal
         
@@ -144,7 +148,7 @@ class DualObjective(nn.Module):
     def forward(self, lamda:torch.Tensor):
         lamda_plus = self.softplus(lamda) #(batch_size)
         cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
-        cij = self.duality_operator.compute_cij(self.prior_r, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
+        cij = self.duality_operator.compute_cij(self.prior_reward, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
         inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size)
         hq_value = self.duality_operator.hq_value(lamda_plus, inner_exp) #(batch_size)
         return hq_value
@@ -208,7 +212,7 @@ class OptimizeLamda:
         
         return target.detach(), iter+1
 
-def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 
+def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 
                    lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
                    lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0) -> torch.Tensor:
     """
@@ -217,7 +221,7 @@ def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor,
     Therefore, this resets to the original state at each time step.
     """
     
-    dual_obj = DualObjective(duality_operator, reference_r, prior_r, q_max, not_terminal)
+    dual_obj = DualObjective(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal)
     opt = OptimizeLamda(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma)
     lamda_star, n_iter = opt.optimize(lamda_from_buffer, lambda_mask, optimizer=optimizer)
     

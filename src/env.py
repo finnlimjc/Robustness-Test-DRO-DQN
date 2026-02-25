@@ -83,13 +83,14 @@ class PortfolioEnv(gym.Env):
         sim = generate_path(self.asset_log_returns, self.batch_size, self.total_steps, seed=seed) #(batch_size, total_steps)
         return sim
     
-    def _get_state(self) -> np.ndarray:
+    def _get_state(self, is_reset:bool=False) -> np.ndarray:
         """
         Generates the next state for the portfolio environment by concatenating the past returns, current portfolio return, current position, and time step information.
         """
+        dt_idx = self.curr_step-1 if is_reset else self.curr_step
         dt = np.full(
             (self.batch_size, 1),
-            self.dts[self.curr_step - 1],
+            self.dts[dt_idx],
             dtype=np.float32
         )
         seq_window = self.seq[:, self.curr_step-self.state_len : self.curr_step]  # (batch_size, state_len)
@@ -173,7 +174,7 @@ class PortfolioEnv(gym.Env):
         else:
             self.seq = self.asset_log_returns.reshape(1, -1) #(1, total_steps)
         
-        next_state = self._get_state()
+        next_state = self._get_state(is_reset=True)
         
         if self.logging:
             self.episode_actions = []
@@ -212,8 +213,8 @@ class PortfolioEnv(gym.Env):
         }
         
         # Update Step
-        next_state = self._get_state()
         self.curr_step += 1
+        next_state = self._get_state()
         done = np.full(
             (self.batch_size, 1),
             self.curr_step == self.total_steps,

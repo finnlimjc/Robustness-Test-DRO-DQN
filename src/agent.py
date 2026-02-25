@@ -285,7 +285,7 @@ class PORDQN(AgentInterface):
             
             if (self.epsilon > 0) and self.training_mode:
                 is_epsilon_greedy = torch.rand(actions.shape[0], device=self.device) < self.epsilon # Select which batch will explore
-                total_explorers = is_epsilon_greedy.sum()
+                total_explorers = is_epsilon_greedy.sum().item() #return an integer
                 if total_explorers > 0:
                     shape = (total_explorers, 1)
                     actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long, generator=self.generator) # Random action for explorers

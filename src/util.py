@@ -278,6 +278,7 @@ class LoadModel:
             agent.q = agent.q.to(target_device)
             agent.target_q = agent.target_q.to(target_device)
             agent.prev_action = agent.prev_action.to(target_device)
+            agent.action_values = agent.action_values.to(target_device)
             self._transfer_optimizer_tensors_device(agent.network_optimizer, target_device)
         
         current_episode = checkpoint['epoch']

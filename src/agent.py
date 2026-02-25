@@ -259,7 +259,7 @@ class PORDQN(AgentInterface):
         self.writer = writer
         self.q_updates = 0 #Increment every update, so time_step*n_updates
     
-    def _modify_action_values(self, action_values:np.ndarray):
+    def _modify_action_values(self, action_values:np.ndarray) -> torch.Tensor:
         if isinstance(action_values, np.ndarray):
             return torch.from_numpy(action_values).to(self.device, dtype=torch.float32)
         elif torch.is_tensor(action_values):
@@ -289,7 +289,7 @@ class PORDQN(AgentInterface):
                 if total_explorers > 0:
                     shape = (total_explorers, 1)
                     actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long, generator=self.generator) # Random action for explorers
-            
+        
         return actions # (Batch, 1)
     
     def prepare_target_states(self, state:torch.Tensor, action:torch.Tensor, next_return_from_prior:torch.Tensor, sampled_states:torch.Tensor, realized_return:torch.Tensor) -> torch.Tensor:
@@ -302,7 +302,7 @@ class PORDQN(AgentInterface):
             action: Tensor of shape [batch_size, action_dim].
             next_return_from_prior: Tensor of shape [batch_size, sample_size] representing the next return sampled from the prior distribution.
             sampled_states: Tensor of shape [batch_size, state_dim] representing the sampled next states from the buffer.
-            realized_return: Tensor of shape [batch_size, sample_size] representing the realized return for each sampled next state.
+            realized_return: Tensor of shape [batch_size, action_dim, sample_size] representing the realized return for each sampled next state.
         
         Outputs:
             next_state_expand: Tensor of shape [batch_size, sample_size, state_dim] representing the prepared next state for each sampled next return from the prior.
@@ -348,7 +348,7 @@ class PORDQN(AgentInterface):
             rewards: Tensor of shape [batch_size, action_dim, n_samples] representing the rewards for each sampled next return.
         """
         #Match Shapes
-        modified_next_return_from_prior = next_return_from_prior.unsqueeze(1).expand(-1, self.action_dim, -1) # (batch_size, action_dim, n_samples)
+        modified_next_return_from_prior = next_return_from_prior.unsqueeze(1).expand(-1, self.buffer_action_dim, -1) # (batch_size, action_dim, n_samples)
         modified_action = action.unsqueeze(-1) # (batch_size, action_dim, 1)
         modified_risk_free_rate = risk_free_rate.unsqueeze(-1).unsqueeze(-1) # (batch_size, 1, 1)
         modified_transaction_cost = transaction_cost.unsqueeze(-1).unsqueeze(-1) # (batch_size, 1, 1)

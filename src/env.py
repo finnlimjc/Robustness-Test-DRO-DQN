@@ -11,8 +11,8 @@ class PortfolioEnv(gym.Env):
     
     Inputs:
         asset_log_returns: a 1D numpy array of log returns for the asset to be traded.
-        start_date: the start date of the simulation
-        end_date: the end date of the simulation
+        start_date: the start date of the downloaded price data, not the start date of the processed log return which would start from start_date + 1 day.
+        end_date: the end date of the downloaded price data.
         rf_rate: the risk-free interest rate for continuous compounding
         trans_cost: the transaction cost and a percentage of the transaction amount
         state_len: total days of past returns to use for state
@@ -70,27 +70,29 @@ class PortfolioEnv(gym.Env):
         
         # Process Dates
         calendar_dates = schedule.index.to_series()
-        days_between = calendar_dates.diff()[1:].dt.days
+        days_between = calendar_dates.diff()[1:].dt.days # Starts from start_date + 1 day
         years_between = days_between/365
         
-        t = np.zeros(len(schedule))
-        t[1:] = years_between.values.cumsum() #Years in Continuous Space
-        self.dts = np.diff(t) #For Interest Rate Compounding
+        t = np.zeros(len(schedule)) # From start_date to end_date
+        t[1:] = years_between.values.cumsum() #Years in Continuous Space [0, 1/365, 2/365...]
+        self.dts = np.diff(t) #For Interest Rate Compounding, starts from start_date+1 to follow how the 1st nan data point will be dropped for log_return
         self.total_steps = len(self.dts)
         self.action_steps = self.total_steps - self.state_len #Number of steps where action can be taken
+        
+        # Add one more timestep after as we need the next time step from current timestep at the end
+        self.dts = np.append(self.dts, np.median(self.dts))
     
     def _simulate(self, seed:int) -> np.ndarray:
         sim = generate_path(self.asset_log_returns, self.batch_size, self.total_steps, seed=seed) #(batch_size, total_steps)
         return sim
     
-    def _get_state(self, is_reset:bool=False) -> np.ndarray:
+    def _get_state(self) -> np.ndarray:
         """
-        Generates the next state for the portfolio environment by concatenating the past returns, current portfolio return, current position, and time step information.
+        Generates the next state for the portfolio environment by concatenating the past returns, current portfolio return, current position, and current to next time step information.
         """
-        dt_idx = self.curr_step-1 if is_reset else self.curr_step
         dt = np.full(
             (self.batch_size, 1),
-            self.dts[dt_idx],
+            self.dts[self.curr_step],
             dtype=np.float32
         )
         seq_window = self.seq[:, self.curr_step-self.state_len : self.curr_step]  # (batch_size, state_len)
@@ -110,7 +112,7 @@ class PortfolioEnv(gym.Env):
             if action.shape[0] == self.batch_size:
                 action = action.unsqueeze(-1) #(batch_size, 1)
         
-        action = action.to(torch.int32) #Index Integer
+        action = action.to(torch.int32).cpu().numpy() #Index Integer
         action = self.action_values[action] #Get Index Value
         
         if isinstance(action, float):
@@ -174,7 +176,7 @@ class PortfolioEnv(gym.Env):
         else:
             self.seq = self.asset_log_returns.reshape(1, -1) #(1, total_steps)
         
-        next_state = self._get_state(is_reset=True)
+        next_state = self._get_state()
         
         if self.logging:
             self.episode_actions = []
@@ -203,7 +205,7 @@ class PortfolioEnv(gym.Env):
         # Take Action and Calculate Reward
         action = self._check_action(action)
         log_return = self.seq[:, self.curr_step:self.curr_step+1]
-        reward, interest, transaction_cost = self._get_reward(action=action, log_return=log_return)
+        reward, interest, transaction_cost = self._get_reward(action=action, log_return=log_return) #Update position
         
         # Update Info
         self.log_wealth += reward

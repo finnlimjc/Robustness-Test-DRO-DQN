@@ -176,7 +176,9 @@ class OptimizeLamda:
     
     def optimize(self, lamda_from_buffer:torch.Tensor, lamda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None) -> tuple[torch.Tensor, int]:
         """
-        Performs gradient ascent to optimize lambda and returns the optimized lambda value.
+        Performs gradient descent to optimize lambda and returns the optimized lambda value. Stop conditions are as follows:
+        1. If current and previous gradient have different signs, it indicates that we passed the optimal value.
+        2. If lambda is below the threshold of -6 or previous gradient is positive, it indicates that we have likely passed the optimal value.
         
         Inputs:
             lamda_from_buffer: Initial lambda values from the replay buffer, shape of (batch_size).
@@ -185,7 +187,7 @@ class OptimizeLamda:
         
         Outputs:
             target: Optimized lambda value.
-            iter: Number of iterations performed.
+            n_iter: Number of iterations performed.
         """
         target = nn.Parameter(lamda_from_buffer.clone())
         if optimizer is None:
@@ -194,17 +196,21 @@ class OptimizeLamda:
         
         prev_grad = None #Early stopping if gradient changes sign
         
-        for iter in range(self.max_iter):
-            hq = self.dual_objective(target)[lamda_mask]
+        for n_iter in range(self.max_iter):
+            hq = self.dual_objective(target)[lamda_mask] #Optimize only active lambdas
             loss = -hq.sum() #We use negative as we want to maximize hq_value
             optimizer.zero_grad()
             loss.backward()
+            
+            target.grad[~lamda_mask] = 0
             grad = target.grad.detach().clone()
             
+            # Note that we are checking active conditions not stop conditions
             if prev_grad is not None:
-                change_sign = (grad * prev_grad < 0)
-                active = (lamda_mask & change_sign & (target > -6))
-                lamda_mask = active #Tensor of shaoe (batch_size)
+                change_sign = (grad*prev_grad > 0) #Only active if both are same sign
+                lower_bound_ok = ((target > -6) | (prev_grad< 0))
+                active = (lamda_mask & change_sign & lower_bound_ok)
+                lamda_mask = active #Tensor of shape (batch_size)
             
             if not lamda_mask.any():
                 break
@@ -213,7 +219,7 @@ class OptimizeLamda:
             optimizer.step()
             scheduler.step()
         
-        return target.detach(), iter+1
+        return target.detach(), n_iter+1
 
 def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 
                    lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,

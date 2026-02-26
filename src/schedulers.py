@@ -3,7 +3,7 @@ class LagrangianLambdaScheduler:
         self.optimizer = optimizer
         self.step_size = step_size # interval at which change in learning rate occurs
         self.gamma = gamma # multiplication factor for increasing the learning rate
-        self.init_lr = init_lr # base (small) learning rate used initially
+        self.init_lr = [0.04,0.2,0.3,0.5,0.8,1.5,3,100,1000,10000,100000] # base (small) learning rate used initially
         self.init_lamda = init_lamda # starting value for lambda parameters
         self.last_epoch = 1
 
@@ -24,18 +24,20 @@ class LagrangianLambdaScheduler:
                     continue
                 if param.dim() == 0:
                     if (self.init_lamda is not None and param.data == self.init_lamda) or (param.data < -3.) or (param.data < -1. and param.grad > 0.):
-                        param_group['lr'] = self.init_lr * self.gamma
+                        param_group['lr'] = self.init_lr[1]
+                    param_group['lr'] = self.init_lr[0]
         elif self.last_epoch == self.step_size:
             for param_group in self.optimizer.param_groups:
                 param = param_group['params'][0]
                 if not param.requires_grad:
                     continue
-                param_group['lr'] = self.init_lr * self.gamma
+                param_group['lr'] = self.init_lr[1]
         elif self.last_epoch % self.step_size == 0:
+            idx = self.last_epoch // 10
             for param_group in self.optimizer.param_groups:
                 param = param_group['params'][0]
                 if not param.requires_grad:
                     continue
                 if param.dim() == 0 and param.data < 0. and param.grad > 0.:
-                    param_group['lr'] *= self.gamma
+                    param_group['lr'] = self.init_lr[idx]
         self.last_epoch += 1

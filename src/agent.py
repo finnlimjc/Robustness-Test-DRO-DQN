@@ -189,12 +189,13 @@ class PORDQN(AgentInterface):
         hq_lr: Learning rate for the HQ optimizer, if hq_optimizer is not None, this is redundant.
         device: Device to run the network on, such as 'cuda' or 'cpu'.
         buffer_max_length: Maximum length of the replay buffer, default is 1e6.
+        clip_gradients: If set to True, neural network gradient will be clipped at a maximum value of 1.0.
         writer: TensorBoard SummaryWriter for logging (optional).
     """
     def __init__(self, state_dim:int, action_dim:int, action_values:np.ndarray, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
                  epsilon:float=0.1, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
-                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, writer:PORDQNProgressWriter=None, seed:int=None):
+                 hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, clip_gradients:bool=False ,writer:PORDQNProgressWriter=None, seed:int=None):
         super().__init__()
         
         # Device
@@ -245,7 +246,7 @@ class PORDQN(AgentInterface):
         # Loss Functions
         self.network_optimizer = torch.optim.Adam(self.q.parameters(), lr=network_lr) if network_optimizer is None else network_optimizer
         self.loss_fn = nn.MSELoss()
-        self.clip_gradients = True
+        self.clip_gradients = clip_gradients
         
         # HQ Optimization
         self.lamda_init = lamda_init

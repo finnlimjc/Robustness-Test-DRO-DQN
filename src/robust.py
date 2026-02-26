@@ -174,78 +174,63 @@ class OptimizeLamda:
         self.step_size = step_size
         self.gamma = gamma
     
-    def optimize(self,
-                 lamda_from_buffer: torch.Tensor,
-                 lamda_mask: torch.Tensor, optimizer=None):
-
+    def optimize(self, lamda_from_buffer: torch.Tensor, lamda_mask: torch.Tensor, optimizer=None):
         batch_size = lamda_from_buffer.shape[0]
-
-        # ---- Create scalar parameters (already on correct device) ----
+        
+        # Create scalar parameters 
         lamda = [
             nn.Parameter(lamda_from_buffer[i].clone().detach(),
                          requires_grad=True)
             for i in range(batch_size)
         ]
-
+        
         # Per-parameter optimizer groups
         optim_input = [{'params': [p]} for p in lamda]
         optimizer = torch.optim.Adam(optim_input, lr=self.lr)
-
-        scheduler = LagrangianLambdaScheduler(
-            optimizer,
-            step_size=self.step_size,
-            gamma=self.gamma,
-            init_lr=self.lr
-        )
-
+        scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
+        
         # Boolean mask (torch, same device)
         lamda_opt = lamda_mask.clone()
         prev_grad = None
         iter_count = 0
-
+        
         while lamda_opt.any():
-
             lamda_tensor = torch.stack(lamda)
-
+            
             # Compute HQ
             hq = self.dual_objective(lamda_tensor)
-
             loss = (-hq[lamda_opt]).sum()
-
             optimizer.zero_grad()
             loss.backward()
-
+            
             # Collect gradients (torch tensors)
             grads = torch.stack([
                 lamda[i].grad if lamda[i].grad is not None
                 else torch.zeros_like(lamda[i])
                 for i in range(batch_size)
             ])
-
-            # ---- Stopping condition (torch version of robust.py) ----
+            
+            # Stopping condition
             if prev_grad is not None:
-
                 same_sign = grads * prev_grad > 0
                 lower_bound_ok = (lamda_tensor > -6) | (prev_grad < 0)
-
                 lamda_opt = lamda_opt & same_sign & lower_bound_ok
-
+            
             # Freeze converged lambdas
             for i in range(batch_size):
                 if not lamda_opt[i]:
                     lamda[i].requires_grad = False
-
+            
             prev_grad = grads.detach()
-
             optimizer.step()
             scheduler.step()
-
+            
             iter_count += 1
             if iter_count >= self.max_iter:
                 break
-
+        
         lamda_final = torch.stack(lamda).detach()
-
+        
         return lamda_final, iter_count
 
 def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 

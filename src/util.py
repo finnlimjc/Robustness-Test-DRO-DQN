@@ -40,6 +40,7 @@ class Config:
                 config.get('duality_params', {}),
                 config.get('q_params', {}),
                 config.get('dqn_params', {}),
+                config.get('eps_scheduler_params', {}),
                 config.get('other_params', {})
             )
 
@@ -80,6 +81,10 @@ class PORDQNProgressWriter:
             "network_optimizer": agent.network_optimizer.state_dict(),
             "network_rng": agent.generator.get_state() if hasattr(agent, 'generator') else None,
             "action_values": agent.action_values,
+            
+            #Epsilon Scheduler
+            "current_epsilon": agent.epsilon_scheduler.epsilon,
+            "current_timestep": agent.epsilon_scheduler.timestep,
             
             #Buffer
             "prev_state": agent.prev_state,
@@ -192,6 +197,31 @@ class PORDQNProgressWriter:
         reciprocal_simpson = 1/(simpson_index + epsilon)#Number of unique actions where 1.13 means that 1 action dominates
         self.writer.add_scalar('Network/effective_actions', reciprocal_simpson, q_updates)
     
+    def log_actual_rewards(self, rewards:np.ndarray|torch.Tensor, current_step:int):
+        if isinstance(rewards, np.ndarray):
+            rewards = torch.from_numpy(rewards)
+        if not torch.is_tensor(rewards):
+            raise TypeError(f"Expected tensor for rewards, instead got:{type(rewards)}")
+        
+        rewards = rewards.detach().cpu()
+        
+        mu = rewards.mean().item()
+        lowest = rewards.min().item()
+        highest = rewards.max().item()
+        q25 = torch.quantile(rewards, 0.25).item()
+        q75 = torch.quantile(rewards, 0.75).item()
+        
+        frac_pos = (rewards > 0).float().mean().item()
+        frac_neg = (rewards < 0).float().mean().item()
+        
+        self.writer.add_scalar("Reward/mean", mu, current_step)
+        self.writer.add_scalar("Reward/min", lowest, current_step)
+        self.writer.add_scalar("Reward/max", highest, current_step)
+        self.writer.add_scalar("Reward/q25", q25, current_step)
+        self.writer.add_scalar("Reward/q75", q75, current_step)
+        self.writer.add_scalar("Reward/frac_pos", frac_pos, current_step)
+        self.writer.add_scalar("Reward/frac_neg", frac_neg, current_step)
+        
     def save_latest_model_params(self, epoch:int, agent, file_name:str=None):
         file_name = f"checkpoint_ep{epoch}.pt" if file_name is None else file_name
         latest_path = os.path.join(self.checkpoint_dir, file_name)
@@ -254,6 +284,10 @@ class LoadModel:
         agent.target_q.load_state_dict(checkpoint['target_q_network'])
         agent.network_optimizer.load_state_dict(checkpoint['network_optimizer'])
         agent.action_values = checkpoint["action_values"]
+        
+        #Epsilon Scheduler
+        agent.epsilon_scheduler.epsilon = checkpoint["current_epsilon"]
+        agent.epsilon_scheduler.timestep = checkpoint['current_timestep']
         
         #Buffer
         agent.prev_state = checkpoint['prev_state']

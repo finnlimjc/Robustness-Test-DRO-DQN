@@ -41,3 +41,24 @@ class LagrangianLambdaScheduler:
                 if param.dim() == 0 and param.data < 0. and param.grad > 0.:
                     param_group['lr'] = self.init_lr[idx]
         self.last_epoch += 1
+
+class EpsilonGlobalScheduler:
+    def __init__(self, epsilon_start:float, total_timesteps:int, epsilon_min:float=0.1):
+        self.epsilon_start=epsilon_start
+        self.epsilon_min = epsilon_min
+        self.reset()
+        
+        self.decay_rate = (self.epsilon_start - self.epsilon_min)/total_timesteps
+        
+    def _decay(self) -> float:
+        decayed_epsilon = self.epsilon_start - self.decay_rate*self.timestep
+        return decayed_epsilon
+    
+    def step(self) -> float:
+        decayed_epsilon = self._decay()
+        self.epsilon = max(self.epsilon_min, decayed_epsilon)
+        self.timestep += 1
+    
+    def reset(self):
+        self.timestep = 0
+        self.epsilon = self.epsilon_start

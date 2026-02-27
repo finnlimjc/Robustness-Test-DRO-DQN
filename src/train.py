@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 
-def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None) -> list[np.ndarray]:
+def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None, checkpoint_interval:int=2000) -> list[np.ndarray]:
     if current_epoch < 0:
         raise ValueError(f"Invalid value for current_epoch: {current_epoch}. Current episode should start from 1.")
     if current_epoch > n_epochs:
@@ -25,10 +25,11 @@ def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None) -> lis
                 else:
                     action_idx = agent.agent_step(reward=reward, observation=next_state, info=info)
                 
-                step_bar.update(1)
-            
                 if writer is not None:
-                    writer.save_model_params_periodically(epoch, agent, checkpoint_interval=1000)
+                    writer.save_model_params_periodically(epoch, agent, checkpoint_interval=checkpoint_interval)
+                    writer.log_actual_rewards(reward, current_step=agent.training_controller.steps)
+                
+                step_bar.update(1)
         
         if writer is not None:
             writer.save_latest_model_params(epoch, agent)

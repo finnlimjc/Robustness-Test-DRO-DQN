@@ -7,6 +7,7 @@ from src.agent_interface import *
 from src.prior_measure import *
 from src.robust import *
 from src.util import PORDQNProgressWriter
+from src.schedulers import EpsilonGlobalScheduler
 
 class ReplayBuffer:
     """
@@ -194,7 +195,7 @@ class PORDQN(AgentInterface):
     """
     def __init__(self, state_dim:int, action_dim:int, action_values:np.ndarray, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
-                 epsilon:float=0.1, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
+                 epsilon_scheduler:EpsilonGlobalScheduler, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
                  hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, clip_gradients:bool=False ,writer:PORDQNProgressWriter=None, seed:int=None):
         super().__init__()
         
@@ -207,7 +208,7 @@ class PORDQN(AgentInterface):
         self.action_values = self._modify_action_values(action_values)
         self.batch_size = batch_size
         self.n_updates = n_updates
-        self.epsilon = epsilon
+        self.epsilon_scheduler = epsilon_scheduler
         
         # Objects
         self.training_controller = training_controller
@@ -284,13 +285,15 @@ class PORDQN(AgentInterface):
             q_values = self.q(observation.to(self.device)) # (Batch, Num_Actions)
             actions = torch.argmax(q_values, dim=-1, keepdim=True) # For each batch, select action with highest Q value (Batch, 1)
             
-            if (self.epsilon > 0) and self.training_mode:
-                is_epsilon_greedy = torch.rand(actions.shape[0], device=self.device) < self.epsilon # Select which batch will explore
+            epsilon = self.epsilon_scheduler.epsilon
+            if (epsilon > 0) and self.training_mode:
+                is_epsilon_greedy = torch.rand(actions.shape[0], device=self.device) < epsilon # Select which batch will explore
                 total_explorers = is_epsilon_greedy.sum().item() #return an integer
                 if total_explorers > 0:
                     shape = (total_explorers, 1)
                     actions[is_epsilon_greedy] = torch.randint(0, self.action_dim, shape, device=self.device, dtype=torch.long, generator=self.generator) # Random action for explorers
-        
+                self.epsilon_scheduler.step()
+                
         return actions # (Batch, 1)
     
     def prepare_target_states(self, state:torch.Tensor, action:torch.Tensor, next_return_from_prior:torch.Tensor, sampled_states:torch.Tensor, realized_return:torch.Tensor) -> torch.Tensor:
@@ -362,6 +365,7 @@ class PORDQN(AgentInterface):
         weighted_cash_return = cash_weight * modified_risk_free_rate # (batch_size, action_dim, 1)
         simple_return_after_transaction = (weighted_asset_return + weighted_cash_return - modified_transaction_cost) + 1.0 # (batch_size, action_dim, n_samples)
         reward = simple_return_after_transaction.log() # (batch_size, action_dim, n_samples)
+        
         return reward
     
     def _cache_lambdas(self, lamdas:torch.Tensor, buffer_idx:torch.Tensor, mask:torch.Tensor):

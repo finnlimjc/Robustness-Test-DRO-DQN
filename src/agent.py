@@ -363,7 +363,7 @@ class PORDQN(AgentInterface):
         
         cash_weight = 1.0 - modified_action # (batch_size, action_dim, 1)
         weighted_cash_return = cash_weight * modified_risk_free_rate # (batch_size, action_dim, 1)
-        simple_return_after_transaction = (weighted_asset_return + weighted_cash_return - modified_transaction_cost) + 1.0 # (batch_size, action_dim, n_samples)
+        simple_return_after_transaction = torch.clamp(weighted_asset_return + weighted_cash_return - modified_transaction_cost + 1.0, min=1e-6) # (batch_size, action_dim, n_samples)
         reward = simple_return_after_transaction.log() # (batch_size, action_dim, n_samples)
         
         return reward

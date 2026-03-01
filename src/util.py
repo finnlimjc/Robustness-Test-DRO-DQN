@@ -197,13 +197,17 @@ class PORDQNProgressWriter:
         reciprocal_simpson = 1/(simpson_index + epsilon)#Number of unique actions where 1.13 means that 1 action dominates
         self.writer.add_scalar('Network/effective_actions', reciprocal_simpson, q_updates)
     
-    def log_actual_rewards(self, rewards:np.ndarray|torch.Tensor, current_step:int):
-        if isinstance(rewards, np.ndarray):
-            rewards = torch.from_numpy(rewards)
-        if not torch.is_tensor(rewards):
-            raise TypeError(f"Expected tensor for rewards, instead got:{type(rewards)}")
+    def _check_array_to_tensor(self, target:np.ndarray|torch.Tensor) -> torch.Tensor:
+        if isinstance(target, np.ndarray):
+            target = torch.from_numpy(target)
+        if not torch.is_tensor(target):
+            raise TypeError(f"Expected tensor for rewards, instead got:{type(target)}")
         
-        rewards = rewards.detach().cpu()
+        return target
+    
+    def log_actual_rewards(self, rewards:np.ndarray|torch.Tensor, transaction_cost:np.ndarray|torch.Tensor, current_step:int):
+        rewards = self._check_array_to_tensor(rewards).detach().cpu()
+        transaction_cost = self._check_array_to_tensor(transaction_cost).detach().cpu()
         
         mu = rewards.mean().item()
         lowest = rewards.min().item()
@@ -221,6 +225,7 @@ class PORDQNProgressWriter:
         self.writer.add_scalar("Reward/q75", q75, current_step)
         self.writer.add_scalar("Reward/frac_pos", frac_pos, current_step)
         self.writer.add_scalar("Reward/frac_neg", frac_neg, current_step)
+        self.writer.add_scalar("Reward/mean_transaction_cost", transaction_cost.mean().item(), current_step)
         
     def save_latest_model_params(self, epoch:int, agent, file_name:str=None):
         file_name = f"checkpoint_ep{epoch}.pt" if file_name is None else file_name

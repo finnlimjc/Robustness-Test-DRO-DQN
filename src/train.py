@@ -27,7 +27,9 @@ def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None, checkp
                 
                 if writer is not None:
                     writer.save_model_params_periodically(epoch, agent, checkpoint_interval=checkpoint_interval)
-                    writer.log_actual_rewards(reward, current_step=agent.training_controller.steps)
+                    
+                    transaction_cost = info['transaction_cost']
+                    writer.log_actual_rewards(reward, transaction_cost, current_step=agent.training_controller.steps)
                 
                 step_bar.update(1)
         

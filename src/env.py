@@ -20,7 +20,7 @@ class PortfolioEnv(gym.Env):
         logging: whether to log the episode data for plotting function
     '''
     
-    def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.005, 
+    def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.0005, 
                  state_len:int=60, batch_size:int=8, logging:bool=False, seed:int=None, use_simulation:bool=True):
         
         super().__init__()
@@ -145,7 +145,7 @@ class PortfolioEnv(gym.Env):
         change_in_weight = action - self.position # (batch_size, 1)
         transaction_cost = self.trans_cost* np.abs(change_in_weight) # (batch_size, 1)
         
-        total_simple_return = 1.0 + weighted_interest + weighted_return - transaction_cost #(1+R)
+        total_simple_return = np.clip(1.0 + weighted_interest + weighted_return - transaction_cost, a_min=1e-6, a_max=None) #(1+R)
         reward = np.log(total_simple_return) # (batch_size, 1)
                 
         # Check to ensure that no values are nan

@@ -16,17 +16,17 @@ class PortfolioEnv(gym.Env):
         rf_rate: the risk-free interest rate for continuous compounding
         trans_cost: the transaction cost and a percentage of the transaction amount
         state_len: total days of past returns to use for state
-        batch_size: number of independent trading environments, for out-of-sample evaluation, set this to be 1.
+        total_paths: number of independent trading environments, for out-of-sample evaluation, set this to be 1.
         logging: whether to log the episode data for plotting function
     '''
     
     def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.0005, 
-                 state_len:int=60, batch_size:int=8, logging:bool=False, seed:int=None, use_simulation:bool=True):
+                 state_len:int=60, total_paths:int=8, logging:bool=False, seed:int=None, use_simulation:bool=True):
         
         super().__init__()
         
-        if not use_simulation and batch_size != 1:
-            print("If you are not using the simulated data, it is recommended to set the batch_size to be 1.")
+        if not use_simulation and total_paths != 1:
+            print("If you are not using the simulated data, it is recommended to set the total_paths to be 1.")
         
         # Market Info
         self.asset_log_returns = asset_log_returns.copy()
@@ -38,7 +38,7 @@ class PortfolioEnv(gym.Env):
         
         # Algo Info
         self.state_len = state_len
-        self.batch_size = batch_size
+        self.total_paths = total_paths
         self.logging = logging
         
         self.use_simulation = use_simulation
@@ -83,7 +83,7 @@ class PortfolioEnv(gym.Env):
         self.dts = np.append(self.dts, np.median(self.dts))
     
     def _simulate(self, seed:int) -> np.ndarray:
-        sim = generate_path(self.asset_log_returns, self.batch_size, self.total_steps, seed=seed) #(batch_size, total_steps)
+        sim = generate_path(self.asset_log_returns, self.total_paths, self.total_steps, seed=seed) #(total_paths, total_steps)
         return sim
     
     def _get_state(self) -> np.ndarray:
@@ -91,15 +91,15 @@ class PortfolioEnv(gym.Env):
         Generates the next state for the portfolio environment by concatenating the past returns, current portfolio return, current position, and current to next time step information.
         """
         dt = np.full(
-            (self.batch_size, 1),
+            (self.total_paths, 1),
             self.dts[self.curr_step],
             dtype=np.float32
         )
-        seq_window = self.seq[:, self.curr_step-self.state_len : self.curr_step]  # (batch_size, state_len)
+        seq_window = self.seq[:, self.curr_step-self.state_len : self.curr_step]  # (total_paths, state_len)
         next_state = np.concatenate([seq_window, self.log_wealth, self.position, dt], axis=1) # Horizontal Append
         
         # No Batching
-        if self.batch_size == 1:
+        if self.total_paths == 1:
             next_state = next_state.flatten() # (state_len,)
 
         return next_state
@@ -109,8 +109,8 @@ class PortfolioEnv(gym.Env):
             action = action.cpu()
         
         if action.ndim == 1:
-            if action.shape[0] == self.batch_size:
-                action = action.unsqueeze(-1) #(batch_size, 1)
+            if action.shape[0] == self.total_paths:
+                action = action.unsqueeze(-1) #(total_paths, 1)
         
         action = action.to(torch.int32).cpu().numpy() #Index Integer
         action = self.action_values[action] #Get Index Value
@@ -125,28 +125,28 @@ class PortfolioEnv(gym.Env):
         Compute the reward (log(1+R)) for a given portfolio action based on asset and risk-free returns.
         
         Inputs:
-            action: Array of shape (batch_size, 1) representing the new portfolio weight allocated to the risky asset. The remaining (1 - action) is held as cash.
-            log_return: Array of shape (batch_size, 1) containing the log returns of the risky asset for the current time step.
+            action: Array of shape (total_paths, 1) representing the new portfolio weight allocated to the risky asset. The remaining (1 - action) is held as cash.
+            log_return: Array of shape (total_paths, 1) containing the log returns of the risky asset for the current time step.
         
         Outputs:
-            reward: Logarithmic portfolio return of shape (batch_size, 1), calculated as the log of the total return from both the risky asset and the cash position, minus transaction costs.
-            interest_return: Risk-free simple return of the cash portion of the portfolio with an expected shape of (batch_size, 1).
-            transaction_cost: Transaction cost for each batch element, penalizing changes in position weights, expected shape of (batch_size, 1).
+            reward: Logarithmic portfolio return of shape (total_paths, 1), calculated as the log of the total return from both the risky asset and the cash position, minus transaction costs.
+            interest_return: Risk-free simple return of the cash portion of the portfolio with an expected shape of (total_paths, 1).
+            transaction_cost: Transaction cost for each batch element, penalizing changes in position weights, expected shape of (total_paths, 1).
         """
         # Risk-Free Return
-        cash_weight = 1.0 - action # (batch_size, 1)
+        cash_weight = 1.0 - action # (total_paths, 1)
         interest_return = np.exp(self.rf_rate* self.dts[self.curr_step]) - 1.0
         weighted_interest = cash_weight*interest_return
         
         # Asset Return
         asset_return = np.exp(log_return) - 1.0
-        weighted_return = action * asset_return # (batch_size, 1)
+        weighted_return = action * asset_return # (total_paths, 1)
         
-        change_in_weight = action - self.position # (batch_size, 1)
-        transaction_cost = self.trans_cost* np.abs(change_in_weight) # (batch_size, 1)
+        change_in_weight = action - self.position # (total_paths, 1)
+        transaction_cost = self.trans_cost* np.abs(change_in_weight) # (total_paths, 1)
         
         total_simple_return = np.clip(1.0 + weighted_interest + weighted_return - transaction_cost, a_min=1e-6, a_max=None) #(1+R)
-        reward = np.log(total_simple_return) # (batch_size, 1)
+        reward = np.log(total_simple_return) # (total_paths, 1)
                 
         # Check to ensure that no values are nan
         if np.isnan(reward).any() or np.isinf(reward).any():
@@ -156,7 +156,7 @@ class PortfolioEnv(gym.Env):
         self.position = action.copy()
         
         interest_return = np.full(
-            (self.batch_size, 1),
+            (self.total_paths, 1),
             interest_return,
             dtype=np.float32
         )
@@ -165,14 +165,14 @@ class PortfolioEnv(gym.Env):
     
     def reset(self) -> tuple[np.ndarray, set]:
         # Initialize Agent State
-        self.position = np.zeros((self.batch_size, 1), dtype=np.float32)
-        self.log_wealth = np.zeros((self.batch_size, 1), dtype=np.float32)
+        self.position = np.zeros((self.total_paths, 1), dtype=np.float32)
+        self.log_wealth = np.zeros((self.total_paths, 1), dtype=np.float32)
         
         # Initialize Simulation State
         self.curr_step = self.state_len
         
         if self.use_simulation:
-            self.seq = self._simulate(self.seed) # (batch_size, total_steps)
+            self.seq = self._simulate(self.seed) # (total_paths, total_steps)
         else:
             self.seq = self.asset_log_returns.reshape(1, -1) #(1, total_steps)
         
@@ -190,12 +190,12 @@ class PortfolioEnv(gym.Env):
         Generate the state and update the environment based on the action taken by the agent.
         
         Inputs:
-            action: the action of shape (batch_size, 1) signifies the action index for Discrete.
+            action: the action of shape (total_paths, 1) signifies the action index for Discrete.
         
         Outputs:
-            next_state: the next state of shape (batch_size, state_len).
-            reward: the reward of shape (batch_size, 1)
-            done: whether the episode is done (batch_size, 1).
+            next_state: the next state of shape (total_paths, state_len).
+            reward: the reward of shape (total_paths, 1)
+            done: whether the episode is done (total_paths, 1).
             truncated: False for the truncated input requirement of a gym environemnt.
             info: the info dictionary that contains interest and transaction cost information.
         '''
@@ -218,7 +218,7 @@ class PortfolioEnv(gym.Env):
         self.curr_step += 1
         next_state = self._get_state()
         done = np.full(
-            (self.batch_size, 1),
+            (self.total_paths, 1),
             self.curr_step == self.total_steps,
             dtype=bool
         )

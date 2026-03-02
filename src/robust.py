@@ -149,7 +149,7 @@ class DualObjective(nn.Module):
         self.softplus = nn.Softplus()
     
     def forward(self, lamda:torch.Tensor):
-        lamda_plus = self.softplus(lamda) #(batch_size)
+        lamda_plus = torch.clamp(self.softplus(lamda), min=0.05) #(batch_size)
         cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
         cij = self.duality_operator.compute_cij(self.prior_reward, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
         inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size)

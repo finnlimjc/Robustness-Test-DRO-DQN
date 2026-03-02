@@ -17,20 +17,22 @@ class ReplayBuffer:
     Inputs:
         state_dim: Dimension of the state space.
         action_dim: Dimension of the action space.
+        total_paths: Number of synthetic paths created in the environment, which affects add().
         batch_size: Batch size for sampling.
         max_len: Maximum length of the replay buffer.
         device: Training torch device such as "cuda" or "cpu", if "cuda", pin_memory is set to True for faster transfer from CPU to GPU. 
     """
-    def __init__(self, state_dim:int, action_dim:int, batch_size:int, max_len:int=1e6, device:torch.device=None, seed:int=None):
+    def __init__(self, state_dim:int, action_dim:int, total_paths:int, batch_size:int, max_len:int=1e6, device:torch.device=None, seed:int=None):
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.total_paths = total_paths
         self.batch_size = batch_size
         self.max_len = int(max_len)
         self.device = torch.device('cpu') if device is None else device
         
         self.buffer_device = torch.device('cpu')
         self.pin_memory = (self.device.type == 'cuda')
-        self.batch_arange = torch.arange(self.batch_size, device=self.buffer_device)
+        self.total_paths_arange = torch.arange(self.total_paths, device=self.buffer_device)
         
         self.reset(seed)
     
@@ -82,19 +84,19 @@ class ReplayBuffer:
         Add a batch of experience tensors to the replay buffer.
         
         Inputs:
-            state: Tensor of shape [batch_size, state_dim].
-            action: Tensor of shape [batch_size, action_dim].
-            reward: Tensor of shape [batch_size]. Note that this is the reward from the environment.
-            next_state: Tensor of shape [batch_size, state_dim].
-            terminal_state: Tensor of shape [batch_size].
-            lambda_val: Tensor of shape [batch_size].
-            risk_free_rate: Tensor of shape [batch_size].
-            transaction_cost: Tensor of shape [batch_size].
+            state: Tensor of shape [total_paths, state_dim].
+            action: Tensor of shape [total_paths, action_dim].
+            reward: Tensor of shape [total_paths]. Note that this is the reward from the environment.
+            next_state: Tensor of shape [total_paths, state_dim].
+            terminal_state: Tensor of shape [total_paths].
+            lambda_val: Tensor of shape [total_paths].
+            risk_free_rate: Tensor of shape [total_paths].
+            transaction_cost: Tensor of shape [total_paths].
         """
         target_device = self.buffer_device
         
         # Add batch data to buffer
-        circular_idx = (self.circular_ptr + self.batch_arange) % self.max_len
+        circular_idx = (self.circular_ptr + self.total_paths_arange) % self.max_len
         self.state[circular_idx] = self._device_transfer(state, target_device)
         self.action[circular_idx] = self._device_transfer(action, target_device)
         self.reward[circular_idx] = self._device_transfer(reward, target_device)
@@ -105,8 +107,8 @@ class ReplayBuffer:
         self.transaction_cost[circular_idx] = self._device_transfer(transaction_cost, target_device)
         
         # Update circular pointer and size
-        self.circular_ptr = (self.circular_ptr + self.batch_size) % self.max_len
-        self.size = min(self.size + self.batch_size, self.max_len)
+        self.circular_ptr = (self.circular_ptr + self.total_paths) % self.max_len
+        self.size = min(self.size + self.total_paths, self.max_len)
     
     def sample(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -193,7 +195,7 @@ class PORDQN(AgentInterface):
         clip_gradients: If set to True, neural network gradient will be clipped at a maximum value of 1.0.
         writer: TensorBoard SummaryWriter for logging (optional).
     """
-    def __init__(self, state_dim:int, action_dim:int, action_values:np.ndarray, batch_size:int, n_updates:int,
+    def __init__(self, state_dim:int, action_dim:int, action_values:np.ndarray, total_paths:int, batch_size:int, n_updates:int,
                  training_controller:TrainingController, prior_measure:PriorStudentDistribution, duality_operator:DualityHQOperator, 
                  epsilon_scheduler:EpsilonGlobalScheduler, lamda_init:float=0.0, qfunc:torch.nn.Module=None, network_optimizer:torch.optim.Optimizer=None, network_lr:float=1e-4,
                  hq_optimizer:torch.optim.Optimizer=None, hq_lr:float=0.02, hq_max_iter:int=100, hq_step_size:int=10, hq_gamma:float=10.0, device:torch.device=None, buffer_max_length:int=1e6, clip_gradients:bool=False ,writer:PORDQNProgressWriter=None, seed:int=None):
@@ -206,6 +208,7 @@ class PORDQN(AgentInterface):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.action_values = self._modify_action_values(action_values)
+        self.total_paths = total_paths
         self.batch_size = batch_size
         self.n_updates = n_updates
         self.epsilon_scheduler = epsilon_scheduler
@@ -242,7 +245,7 @@ class PORDQN(AgentInterface):
         
         # Buffer
         self.buffer_action_dim = 1  # Fixed action dimension to 1 as we are using epsilon greedy and trading one asset.
-        self.buffer = ReplayBuffer(self.state_dim, self.buffer_action_dim, self.batch_size, buffer_max_length, self.device, seed=self.buffer_seed) 
+        self.buffer = ReplayBuffer(self.state_dim, self.buffer_action_dim, self.total_paths, self.batch_size, buffer_max_length, self.device, seed=self.buffer_seed) 
         
         # Loss Functions
         self.network_optimizer = torch.optim.Adam(self.q.parameters(), lr=network_lr) if network_optimizer is None else network_optimizer
@@ -500,7 +503,7 @@ class PORDQN(AgentInterface):
         transaction_cost = info.get('transaction_cost', 0.0)
         
         terminal_tensor = torch.full(
-            (self.batch_size, ),
+            (self.total_paths, ),
             is_terminal,
             dtype=torch.bool,
             device=self.device
@@ -511,13 +514,13 @@ class PORDQN(AgentInterface):
             risk_free_rate,
             dtype=torch.float32,
             device=self.device
-        ).reshape(-1).expand(self.batch_size)
+        ).reshape(-1).expand(self.total_paths)
 
         transaction_cost_tensor = torch.as_tensor(
             transaction_cost,
             dtype=torch.float32,
             device=self.device
-        ).reshape(-1).expand(self.batch_size)
+        ).reshape(-1).expand(self.total_paths)
 
         return terminal_tensor, risk_free_rate_tensor, transaction_cost_tensor
     
@@ -526,13 +529,13 @@ class PORDQN(AgentInterface):
         Actions to take when agent in training mode i.e. adding to replay buffer, cloning target q network and training q network
         
         Inputs:
-            reward: Reward tensor of shape [batch_size].
-            observation: Observation tensor of shape [batch_size, obs_dim].
-            terminal: Terminal tensor of shape [batch_size], indicating whether each episode has ended.
+            reward: Reward tensor of shape [total_paths].
+            observation: Observation tensor of shape [total_paths, obs_dim].
+            terminal: Terminal tensor of shape [total_paths], indicating whether each episode has ended.
             info: Additional info (not used here).
         '''
         self.training_controller.step_increment()
-        lamda_init = torch.full((self.batch_size, ), self.lamda_init, dtype=torch.float32, device=self.device)
+        lamda_init = torch.full((self.total_paths, ), self.lamda_init, dtype=torch.float32, device=self.device)
         terminal_tensor, risk_free_rate_tensor, transaction_cost_tensor = self._handle_terminal_state_and_info(is_terminal, info)
         self.buffer.add(self.prev_state, self.prev_action, reward, observation, terminal_tensor, lamda_init, risk_free_rate_tensor, transaction_cost_tensor)
         sufficient_samples = self.training_controller.has_samples(len(self.buffer))

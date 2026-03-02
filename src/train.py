@@ -8,13 +8,13 @@ def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None, checkp
         raise ValueError(f"Current episode ({current_epoch}) cannot exceed total episodes ({n_epochs}).")
     
     all_cum_rewards = []
-    batch_size = agent.batch_size
+    total_paths = env.total_paths
     for epoch in range(current_epoch, n_epochs+1):
-        cum_rewards = np.zeros(shape=(batch_size, 1))
+        cum_rewards = np.zeros(shape=(total_paths, 1))
         observation, _ = env.reset()
         action_idx = agent.agent_start(observation)
         steps = env.action_steps
-        done = np.zeros(batch_size, dtype=bool)
+        done = np.zeros(total_paths, dtype=bool)
         
         with tqdm(total=steps, desc=f"Episode {epoch}", mininterval=2) as step_bar:
             while not done.any():

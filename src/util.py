@@ -41,6 +41,7 @@ class Config:
                 config.get('q_params', {}),
                 config.get('dqn_params', {}),
                 config.get('eps_scheduler_params', {}),
+                config.get('prior_params', {}),
                 config.get('other_params', {})
             )
 

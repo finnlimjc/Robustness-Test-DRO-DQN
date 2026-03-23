@@ -277,7 +277,7 @@ class PORDQN(AgentInterface):
         Get action from the agent given an observation. Uses epsilon-greedy exploration if enabled by setting epsilon > 0.
         
         Inputs:
-            observation: Observation tensor of shape [batch_size, obs_dim]. Preprocessed to be float tensor in agent_interface.py.
+            observation: Observation tensor of shape [batch_size or total_paths, obs_dim]. Preprocessed to be float tensor in agent_interface.py.
         
         Outputs:
             actions: Tensor of selected actions of shape [batch_size, 1].
@@ -327,6 +327,7 @@ class PORDQN(AgentInterface):
         next_state_expand[..., 60:61] += realized_return.squeeze(1).unsqueeze(-1) # Update realized return in state (batch_size, sample_size, state_dim)
         
         reference_return = sampled_states[:, 59:60].clone() # (batch_size, 1)
+        
         return next_state_expand, reference_return
         
     def clone_q(self):
@@ -482,6 +483,7 @@ class PORDQN(AgentInterface):
         
         if self.writer is not None:
             self.log_indicators(rewards, next_state, not_terminal, hq_value, n_iter, lamda_star, mask)
+            self.writer.log_corrected_radius(epsilon_bar, self.q_updates)
             self.writer.log_policy_action(action_weight, self.q_updates, decimal_places=1)
             
         return loss

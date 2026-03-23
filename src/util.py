@@ -5,6 +5,8 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
+from src.check_input import check_modify_obs
+
 def atomic_torch_save(obj, file_path:str):
     """
     Save temporary file to prevent file loss during saving errors.
@@ -148,6 +150,15 @@ class PORDQNProgressWriter:
             )
             self.writer.flush()
     
+    def log_corrected_radius(self, epsilon_bar:torch.Tensor, q_updates:int):
+        if q_updates % 100 == 0:
+            self.writer.add_histogram(
+                "Lambda/corrected_epsilon",
+                epsilon_bar.detach().cpu().flatten(),
+                q_updates
+            )
+            self.writer.flush()
+    
     def _calculate_gradient(self, qfunc:torch.nn.Module) -> torch.Tensor:
         total_norm = 0.0
         for p in qfunc.parameters():
@@ -227,7 +238,37 @@ class PORDQNProgressWriter:
         self.writer.add_scalar("Reward/frac_pos", frac_pos, current_step)
         self.writer.add_scalar("Reward/frac_neg", frac_neg, current_step)
         self.writer.add_scalar("Reward/mean_transaction_cost", transaction_cost.mean().item(), current_step)
+    
+    def log_paths_q_vals(self, obs:torch.Tensor|np.ndarray, qfunc:torch.nn.Module, device:torch.device):
+        if not hasattr(self, 'q_val_path_step'):
+            self.q_val_path_step = 0
         
+        obs = check_modify_obs(obs)
+        with torch.no_grad():
+            q_vals = qfunc(obs.to(device=device))
+        
+        total_paths, action_vals = q_vals.shape
+        for p in range(total_paths):
+            for a in range(action_vals):
+                self.writer.add_scalar(f"Action/action_{a}", q_vals[p, a].item(), self.q_val_path_step)
+            self.q_val_path_step += 1
+    
+    def log_q_value_rankings(self, obs:torch.Tensor|np.ndarray, qfunc:torch.nn.Module, device:torch.device):
+        if not hasattr(self, 'q_rank_step'):
+            self.q_rank_step = 0
+        
+        obs = check_modify_obs(obs)
+        with torch.no_grad():
+            q_vals = qfunc(obs.to(device=device))
+        
+        vals_to_rank_ids = torch.argsort(q_vals, dim=-1, descending=True)
+        rank_ids_to_ranks = torch.argsort(vals_to_rank_ids, dim=-1)
+        total_paths, action_vals = q_vals.shape
+        for p in range(total_paths):
+            for a in range(action_vals):
+                self.writer.add_scalar(f"QRank/action_{a}", rank_ids_to_ranks[p, a].item(), self.q_rank_step)
+            self.q_rank_step += 1
+    
     def save_latest_model_params(self, epoch:int, agent, file_name:str=None):
         file_name = f"checkpoint_ep{epoch}.pt" if file_name is None else file_name
         latest_path = os.path.join(self.checkpoint_dir, file_name)

@@ -1,7 +1,11 @@
 import numpy as np
 from tqdm import tqdm
 
-def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None, checkpoint_interval:int=2000) -> list[np.ndarray]:
+from src.env import PortfolioEnv
+from src.agent import PORDQN
+from src.util import PORDQNProgressWriter
+
+def train_agent(env:PortfolioEnv, agent:PORDQN, current_epoch:int, n_epochs:int, writer:PORDQNProgressWriter=None, checkpoint_interval:int=5000) -> list[np.ndarray]:
     if current_epoch < 0:
         raise ValueError(f"Invalid value for current_epoch: {current_epoch}. Current episode should start from 1.")
     if current_epoch > n_epochs:
@@ -30,10 +34,12 @@ def train_agent(env, agent, current_epoch:int, n_epochs:int, writer=None, checkp
                     
                     transaction_cost = info['transaction_cost']
                     writer.log_actual_rewards(reward, transaction_cost, current_step=agent.training_controller.steps)
-                
+                    writer.log_q_value_rankings(obs=next_state, qfunc=agent.q, device=agent.device)
+                    
                 step_bar.update(1)
         
         if writer is not None:
+            writer.log_paths_q_vals(obs=next_state, qfunc=agent.q, device=agent.device)
             writer.save_latest_model_params(epoch, agent)
             writer.writer.flush()
         

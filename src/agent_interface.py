@@ -71,21 +71,21 @@ class TrainingController:
         train_steps: Number of steps between training the network.
         clone_steps: Number of steps between cloning the target network.
         batch_size: Batch size for training.
-        n_batches: Number of batches for training.
+        n_updates: Number of batches for training.
     
     """
-    def __init__(self, train_steps:int=None, clone_steps:int=None, batch_size:int=None, n_batches:int=None):
+    def __init__(self, train_steps:int=None, clone_steps:int=None, batch_size:int=None, n_updates:int=None):
         self.train_steps = train_steps
         self.clone_steps = clone_steps
         self.batch_size = batch_size
-        self.n_batches = n_batches
+        self.n_updates = n_updates
         self.steps = 0
     
     def step_increment(self):
         self.steps += 1
     
     def has_samples(self, buffer_len:int) -> bool:
-        return buffer_len >= self.batch_size * self.n_batches
+        return buffer_len >= self.batch_size * self.n_updates
     
     def should_train(self) -> bool:
         is_train_step = (self.steps % self.train_steps == 0)

@@ -102,7 +102,8 @@ class OptimalBlockSize:
         return min(block_size, max_block_size)
 
 def generate_path(data:np.ndarray, n_sims:int, t:int, seed:int=None) -> np.ndarray:
-    optimal_block_size = OptimalBlockSize(data).optimal_stationary_block_size()
+    optimal_block_size = OptimalBlockSize(data**2).optimal_stationary_block_size() #Square it as we want to capture volatility clustering
     optimal_block_size = int(np.ceil(optimal_block_size))
+    print(f"Optimal block size used for simulation: {optimal_block_size}")
     path = stationary_bootstrap(data, n_sims=n_sims, t=t, avg_block_size=optimal_block_size, seed=seed)
     return path #(n_sims, t)

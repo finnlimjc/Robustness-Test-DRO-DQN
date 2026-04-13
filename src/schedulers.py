@@ -8,7 +8,7 @@ class LagrangianLambdaScheduler:
         self.last_epoch = 1
 
     def step(self):
-        '''
+        """
         Use small init_lr for first step_size epochs to refine cached lambdas
         EXCEPT for the following which are set to init_lr * gamma:
         1. For cached lambdas that are < -1 (equivalent to lambda_plus=0.31) and headed down, i.e. param.grad > 0
@@ -16,7 +16,7 @@ class LagrangianLambdaScheduler:
         3. Non-cached lambdas i.e. set to init_lamda
         After step_size epochs, increase lr to init_lr * gamma for all lambdas
         Thereafter, increase lr by a factor of gamma for lambdas that are < 0 and headed down every step_size epochs
-        '''
+        """
         if self.last_epoch == 1:
             for param_group in self.optimizer.param_groups:
                 param = param_group['params'][0]
@@ -45,7 +45,7 @@ class LagrangianLambdaScheduler:
 
 class EpsilonGlobalScheduler:
     def __init__(self, epsilon_start:float, total_timesteps:int, epsilon_min:float=0.1):
-        self.epsilon_start=epsilon_start
+        self.epsilon_start = epsilon_start
         self.epsilon_min = epsilon_min
         self.reset()
         

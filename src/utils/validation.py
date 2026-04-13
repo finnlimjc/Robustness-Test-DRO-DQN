@@ -7,7 +7,7 @@ def check_modify_obs(observation:torch.Tensor|np.ndarray) -> torch.Tensor:
     
     Input:
         observation: Observation input to check and reshape.
-        
+    
     Output:
         observation: Reshaped observation tensor of type float.
     """
@@ -39,7 +39,6 @@ def check_modify_reward(reward:torch.Tensor|np.ndarray|float) -> torch.Tensor:
     Output:
         reward: Reshaped reward tensor of type float.
     """
-    
     #Convert to tensor of type float
     if isinstance(reward, float):
         reward = torch.tensor([reward], dtype=torch.float32)

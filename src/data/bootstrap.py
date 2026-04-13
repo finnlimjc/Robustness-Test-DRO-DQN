@@ -3,8 +3,8 @@ from statsmodels.tsa.stattools import acf
 
 def stationary_bootstrap(data:np.ndarray, n_sims:int=1, t:int=252, avg_block_size:int=None, seed:int=None) -> np.ndarray:
     """
-    Generates bootstrap samples using the stationary block bootstrap method. 
-    This method creates bootstrap samples by randomly selecting blocks of consecutive data points from the original dataset, with the block lengths following a geometric distribution. 
+    Generates bootstrap samples using the stationary block bootstrap method.
+    This method creates bootstrap samples by randomly selecting blocks of consecutive data points from the original dataset, with the block lengths following a geometric distribution.
     
     Inputs:
         data: The original time series data as a 1D numpy array.
@@ -31,7 +31,7 @@ def stationary_bootstrap(data:np.ndarray, n_sims:int=1, t:int=252, avg_block_siz
                 idx = rng.integers(T)
             else:
                 idx = (idx + 1) % T #Implement circular indexing
-            
+        
             sims[i, array_idx] = data[idx]
             array_idx += 1
     
@@ -93,7 +93,7 @@ class OptimalBlockSize:
         G_hat = np.sum(lambda_vals* np.abs(k)* R_hat)
         D_hat = 2.0* g_hat**2
         return G_hat, D_hat
-
+    
     def optimal_stationary_block_size(self, c:int=2, raise_error:bool=True) -> float:
         M = self._adaptive_bandwidth(c=c, raise_error=raise_error)
         G_hat, D_hat = self._long_run_variance_components(M)

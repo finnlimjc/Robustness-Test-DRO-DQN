@@ -2,8 +2,8 @@ import numpy as np
 from tqdm import tqdm
 
 from src.env import PortfolioEnv
-from src.agent import PORDQN
-from src.util import PORDQNProgressWriter
+from src.agents.portfolio import PORDQN
+from src.utils.writer import PORDQNProgressWriter
 
 def train_agent(env:PortfolioEnv, agent:PORDQN, current_epoch:int, n_epochs:int, writer:PORDQNProgressWriter=None, checkpoint_interval:int=5000) -> list[np.ndarray]:
     if current_epoch < 0:

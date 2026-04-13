@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from src.schedulers import *
+
+from src.schedulers import LagrangianLambdaScheduler
 
 class DualityHQOperator:
     """
@@ -11,6 +12,7 @@ class DualityHQOperator:
         delta: Entropy regularization coefficient for the Sinkhorn Ball.
         sinkhorn_radius: Sinkhorn radius (epsilon).
     """
+    
     def __init__(self, discount_rate:float, delta:float, sinkhorn_radius:float, norm_order:int=1):
         self.discount_rate = discount_rate
         self.delta = delta
@@ -101,7 +103,6 @@ class DualityHQOperator:
         Outputs:
             epsilon_bar: Updated Sinkhorn radius after entropy bias correction, shape of (batch_size).
         """
-        
         exp_term = -cost/self.delta #(batch_size, n_samples)
         log_mean_exp = self.inner_expectation(exp_term) #(batch_size)
         epsilon_bar = self.sinkhorn_radius + self.delta*log_mean_exp #(batch_size)
@@ -121,7 +122,7 @@ class DualityHQOperator:
         val = -lamda_plus* (self.sinkhorn_radius + self.delta*inner_exp) # (batch_size)
         return val
 
-class DualObjective(nn.Module): 
+class DualObjective(nn.Module):
     """
     Neural network module to compute the dual objective (lambda^+) for the HQ operator.
     
@@ -137,6 +138,7 @@ class DualObjective(nn.Module):
     Outputs:
         hq_value: HQ value, shape of (batch_size).
     """
+    
     def __init__(self, duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor):
         super().__init__()
         self.duality_operator = duality_operator
@@ -167,6 +169,7 @@ class OptimizeLamda:
         step_size: Step size for the learning rate scheduler.
         gamma: Decay factor for the learning rate scheduler.
     """
+    
     def __init__(self, dual_objective:DualObjective, lr:float, max_iter:int, step_size:int, gamma:float):
         self.dual_objective = dual_objective
         self.lr = lr
@@ -177,7 +180,7 @@ class OptimizeLamda:
     def optimize(self, lamda_from_buffer: torch.Tensor, lamda_mask: torch.Tensor, optimizer=None):
         batch_size = lamda_from_buffer.shape[0]
         
-        # Create scalar parameters 
+        # Create scalar parameters
         lamda = [
             nn.Parameter(lamda_from_buffer[i].clone().detach(),
                          requires_grad=True)
@@ -233,7 +236,7 @@ class OptimizeLamda:
         
         return lamda_final, iter_count
 
-def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, 
+def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor, prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor,
                    lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
                    lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0) -> torch.Tensor:
     """
@@ -241,26 +244,26 @@ def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor,
     This is called per update step which happens at each time step for n episodes.
     Therefore, this resets to the original state at each time step.
     """
-    
     dual_obj = DualObjective(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal)
     opt = OptimizeLamda(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma)
     lamda_star, n_iter = opt.optimize(lamda_from_buffer, lambda_mask, optimizer=optimizer)
     
     with torch.no_grad():
         hq_value = dual_obj(lamda_star)
-
+    
     return hq_value, lamda_star, n_iter
 
-class EmpiricalDualObjective(DualObjective):
+class SharedLambdaDualObjective(DualObjective):
     """
     Variant of DualObjective that treats the batch as a single empirical distribution.
     Returns a scalar HQ value by averaging inner_exp over valid batch samples (mask=True),
     rather than returning per-sample HQ values of shape (batch_size,).
-
+    
     Inputs:
         mask: Boolean tensor of shape (batch_size,) indicating valid samples (epsilon_bar > 0).
         All other inputs are identical to DualObjective.
     """
+    
     def __init__(self, duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor,
                  prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, mask:torch.Tensor):
         super().__init__(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal)
@@ -280,17 +283,18 @@ class EmpiricalDualObjective(DualObjective):
         mean_inner_exp = inner_exp[self.mask].mean() #scalar — valid samples only
         return self.duality_operator.hq_value(lamda_plus, mean_inner_exp) #scalar
 
-class SharedOptimizeLamda(OptimizeLamda):
+class SharedLambdaOptimizer(OptimizeLamda):
     """
     Variant of OptimizeLamda that optimizes a single shared scalar lambda over the full batch.
-    Uses EmpiricalDualObjective (scalar HQ) as the objective.
-
+    Uses SharedLambdaDualObjective (scalar HQ) as the objective.
+    
     Convergence: stops when the change in loss between iterations falls below loss_tol.
     """
+    
     def __init__(self, dual_objective:DualObjective, lr:float, max_iter:int, step_size:int, gamma:float, loss_tol:float=1e-6):
         super().__init__(dual_objective, lr, max_iter, step_size, gamma)
         self.loss_tol = loss_tol
-
+    
     def optimize(self, lamda_from_buffer:torch.Tensor, optimizer=None):
         """
         Inputs:
@@ -303,44 +307,44 @@ class SharedOptimizeLamda(OptimizeLamda):
         lamda = nn.Parameter(lamda_from_buffer.clone().detach(), requires_grad=True)
         optimizer = torch.optim.Adam([{'params': [lamda]}], lr=self.lr)
         scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
-
+        
         prev_loss = None
         iter_count = 0
-
+        
         while True:
             hq = self.dual_objective(lamda) #scalar
             loss = -hq
             optimizer.zero_grad()
             loss.backward()
-
+            
             if prev_loss is not None and abs(loss.item() - prev_loss) < self.loss_tol:
                 break
-
+            
             prev_loss = loss.item()
             optimizer.step()
             scheduler.step()
             iter_count += 1
             if iter_count >= self.max_iter:
                 break
-
+        
         return lamda.detach(), iter_count
 
-def hq_opt_empirical(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor,
-                     prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor,
-                     lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
-                     lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0, loss_tol:float=1e-3):
+def hq_opt_shared_lambda(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor,
+                         prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor,
+                         lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
+                         lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0, loss_tol:float=1e-3):
     """
     HQ Optimizer treating the batch as a single empirical distribution with one shared lambda.
     Optimizes lambda over the batch-level dual objective (average over valid samples), then
     recomputes per-sample HQ_i(lambda*) values to use as individual Q-network TD targets.
-
+    
     Outputs:
         hq_values: Per-sample HQ values of shape (batch_size,) for Q-network loss.
         lamda_star: Optimized scalar lambda tensor.
         n_iter: Number of optimization iterations taken.
     """
-    dual_obj = EmpiricalDualObjective(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal, lambda_mask)
-    opt = SharedOptimizeLamda(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma, loss_tol=loss_tol)
+    dual_obj = SharedLambdaDualObjective(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal, lambda_mask)
+    opt = SharedLambdaOptimizer(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma, loss_tol=loss_tol)
     lamda_star, n_iter = opt.optimize(lamda_from_buffer, optimizer=optimizer)
     
     softplus_fn = nn.Softplus()

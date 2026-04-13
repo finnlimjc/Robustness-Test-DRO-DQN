@@ -3,12 +3,12 @@ import numpy as np
 import pandas_market_calendars as mcal
 import torch
 
-from src.stationary_block_bootstrap import generate_path
+from src.data.bootstrap import generate_path
 
 class PortfolioEnv(gym.Env):
-    '''
+    """
     Simulator for the Agent Environment
-    
+
     Inputs:
         asset_log_returns: a 1D numpy array of log returns for the asset to be traded.
         start_date: the start date of the downloaded price data, not the start date of the processed log return which would start from start_date + 1 day.
@@ -18,7 +18,7 @@ class PortfolioEnv(gym.Env):
         state_len: total days of past returns to use for state
         total_paths: number of independent trading environments, for out-of-sample evaluation, set this to be 1.
         logging: whether to log the episode data for plotting function
-    '''
+    """
     
     def __init__(self, asset_log_returns:np.ndarray, start_date:str='1995-01-01', end_date:str='2023-12-31', rf_rate:float=0.024, trans_cost:float=0.0005, 
                  state_len:int=60, total_paths:int=8, logging:bool=False, seed:int=None, use_simulation:bool=True):
@@ -186,7 +186,7 @@ class PortfolioEnv(gym.Env):
         return next_state, {}
     
     def step(self, action:torch.Tensor):
-        '''
+        """
         Generate the state and update the environment based on the action taken by the agent.
         
         Inputs:
@@ -198,7 +198,7 @@ class PortfolioEnv(gym.Env):
             done: whether the episode is done (total_paths, 1).
             truncated: False for the truncated input requirement of a gym environemnt.
             info: the info dictionary that contains interest and transaction cost information.
-        '''
+        """
         if not (hasattr(self, 'position') and hasattr(self, 'log_wealth')):
             raise AttributeError('Please use reset() to initialize environment.')
         

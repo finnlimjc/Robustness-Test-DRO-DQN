@@ -248,6 +248,107 @@ def hq_opt_with_nn(duality_operator:DualityHQOperator, reference_r:torch.Tensor,
     
     with torch.no_grad():
         hq_value = dual_obj(lamda_star)
-    
+
     return hq_value, lamda_star, n_iter
+
+class EmpiricalDualObjective(DualObjective):
+    """
+    Variant of DualObjective that treats the batch as a single empirical distribution.
+    Returns a scalar HQ value by averaging inner_exp over valid batch samples (mask=True),
+    rather than returning per-sample HQ values of shape (batch_size,).
+
+    Inputs:
+        mask: Boolean tensor of shape (batch_size,) indicating valid samples (epsilon_bar > 0).
+        All other inputs are identical to DualObjective.
+    """
+    def __init__(self, duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor,
+                 prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor, mask:torch.Tensor):
+        super().__init__(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal)
+        self.mask = mask
     
+    def forward(self, lamda:torch.Tensor):
+        """
+        Inputs:
+            lamda: Scalar tensor (0-dim). Broadcasts correctly in compute_cij via unsqueeze(-1) -> shape (1,).
+        Outputs:
+            hq_value: Scalar HQ value representing the batch-level empirical dual objective.
+        """
+        lamda_plus = self.softplus(lamda)
+        cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
+        cij = self.duality_operator.compute_cij(self.prior_reward, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
+        inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size,)
+        mean_inner_exp = inner_exp[self.mask].mean() #scalar — valid samples only
+        return self.duality_operator.hq_value(lamda_plus, mean_inner_exp) #scalar
+
+class SharedOptimizeLamda(OptimizeLamda):
+    """
+    Variant of OptimizeLamda that optimizes a single shared scalar lambda over the full batch.
+    Uses EmpiricalDualObjective (scalar HQ) as the objective.
+
+    Convergence: stops when the change in loss between iterations falls below loss_tol.
+    """
+    def __init__(self, dual_objective:DualObjective, lr:float, max_iter:int, step_size:int, gamma:float, loss_tol:float=1e-6):
+        super().__init__(dual_objective, lr, max_iter, step_size, gamma)
+        self.loss_tol = loss_tol
+
+    def optimize(self, lamda_from_buffer:torch.Tensor, optimizer=None):
+        """
+        Inputs:
+            lamda_from_buffer: Scalar tensor used as warm start (agent-level self.lambda_val).
+            optimizer: Unused — a new Adam optimizer is created internally each call.
+        Outputs:
+            lamda_final: Optimized scalar tensor.
+            iter_count: Number of iterations taken.
+        """
+        lamda = nn.Parameter(lamda_from_buffer.clone().detach(), requires_grad=True)
+        optimizer = torch.optim.Adam([{'params': [lamda]}], lr=self.lr)
+        scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
+
+        prev_loss = None
+        iter_count = 0
+
+        while True:
+            hq = self.dual_objective(lamda) #scalar
+            loss = -hq
+            optimizer.zero_grad()
+            loss.backward()
+
+            if prev_loss is not None and abs(loss.item() - prev_loss) < self.loss_tol:
+                break
+
+            prev_loss = loss.item()
+            optimizer.step()
+            scheduler.step()
+            iter_count += 1
+            if iter_count >= self.max_iter:
+                break
+
+        return lamda.detach(), iter_count
+
+def hq_opt_empirical(duality_operator:DualityHQOperator, reference_r:torch.Tensor, prior_r:torch.Tensor,
+                     prior_reward:torch.Tensor, q_max:torch.Tensor, not_terminal:torch.Tensor,
+                     lamda_from_buffer:torch.Tensor, lambda_mask:torch.Tensor, optimizer:torch.optim.Optimizer=None,
+                     lr:float=0.02, max_iter:int=100, step_size:int=10, gamma:float=10.0, loss_tol:float=1e-3):
+    """
+    HQ Optimizer treating the batch as a single empirical distribution with one shared lambda.
+    Optimizes lambda over the batch-level dual objective (average over valid samples), then
+    recomputes per-sample HQ_i(lambda*) values to use as individual Q-network TD targets.
+
+    Outputs:
+        hq_values: Per-sample HQ values of shape (batch_size,) for Q-network loss.
+        lamda_star: Optimized scalar lambda tensor.
+        n_iter: Number of optimization iterations taken.
+    """
+    dual_obj = EmpiricalDualObjective(duality_operator, reference_r, prior_r, prior_reward, q_max, not_terminal, lambda_mask)
+    opt = SharedOptimizeLamda(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma, loss_tol=loss_tol)
+    lamda_star, n_iter = opt.optimize(lamda_from_buffer, optimizer=optimizer)
+    
+    softplus_fn = nn.Softplus()
+    with torch.no_grad():
+        lamda_plus = softplus_fn(lamda_star) #scalar
+        cost = duality_operator.compute_cost(reference_r, prior_r) #(batch_size, n_samples)
+        cij = duality_operator.compute_cij(prior_reward, q_max, not_terminal, lamda_plus, cost) #(batch_size, n_samples)
+        inner_exp = duality_operator.inner_expectation(cij) #(batch_size,)
+        hq_values = duality_operator.hq_value(lamda_plus, inner_exp) #(batch_size,)
+    
+    return hq_values, lamda_star, n_iter

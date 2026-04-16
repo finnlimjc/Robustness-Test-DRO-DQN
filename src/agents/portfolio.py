@@ -204,11 +204,13 @@ class SharedLambdaPORDQN(PORDQN):
     lambda per buffer sample. The scalar lambda is updated each training step and serves as the
     warm start for the next call, replacing the per-sample lambda caching in the replay buffer.
     
-    No additional constructor parameters.
+    Inputs (in addition to PORDQN, forwarded via **kwargs):
+        loss_tol: Tolerance for convergence in the HQ optimization routine.
     """
     
-    def __init__(self, **kwargs):
+    def __init__(self, loss_tol:float=1e-3, **kwargs):
         super().__init__(**kwargs)
+        self.loss_tol = loss_tol
         self.lambda_val = torch.tensor(float(self.lamda_init), dtype=torch.float32, device=self.device)
     
     def _hq_optimize(self, reference_return:torch.Tensor, next_return_from_prior:torch.Tensor, rewards_from_prior:torch.Tensor, optimal_q_targets:torch.Tensor,
@@ -216,7 +218,7 @@ class SharedLambdaPORDQN(PORDQN):
         hq_value, lamda_star, n_iter = hq_opt_shared_lambda(
             self.duality_operator, reference_return, next_return_from_prior, rewards_from_prior,
             optimal_q_targets, not_terminal, self.lambda_val, mask,
-            lr=self.hq_lr, max_iter=self.hq_max_iter, step_size=self.hq_step_size, gamma=self.hq_gamma)
+            lr=self.hq_lr, max_iter=self.hq_max_iter, step_size=self.hq_step_size, gamma=self.hq_gamma, loss_tol=self.loss_tol)
         
         # Expand scalar to (batch_size,) for uniform interface with PORDQN
         return hq_value, lamda_star.expand(self.batch_size), n_iter

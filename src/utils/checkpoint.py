@@ -1,7 +1,5 @@
 import torch
 
-from src.utils.writer import atomic_torch_save
-
 class LoadModel:
     def __init__(self, runs_folder_name:str="runs", checkpoint_folder_name:str="checkpoints"):
         self.device = torch.device("cpu")

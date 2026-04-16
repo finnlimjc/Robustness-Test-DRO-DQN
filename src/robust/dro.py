@@ -19,6 +19,10 @@ class DualityHQOperator:
         self.sinkhorn_radius = sinkhorn_radius
         self.norm_order = norm_order
     
+    def _check_numerical_stability(self, tensor:torch.Tensor, name:str):
+        if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+            raise ValueError(f"Numerical instability in {name}, max: {tensor.max()}, min: {tensor.min()}")
+    
     def compute_cost(self, reference_r:torch.Tensor, prior_r:torch.Tensor) -> torch.Tensor:
         """
         Computes the norm cost between reference and prior returns.
@@ -53,8 +57,7 @@ class DualityHQOperator:
         Outputs:
             cij: Exponential term used in the inner expectation, shape of (batch_size, n_samples).
         """
-        if torch.isnan(prior_reward).any() or torch.isinf(prior_reward).any():
-            raise ValueError(f"Numerical instability in prior_reward, max: {prior_reward.max()}, min: {prior_reward.min()}")
+        self._check_numerical_stability(prior_reward, "prior_reward")
         assert prior_reward.shape[1] == 1, "Current implementation for Prior Reward only accept trading of one asset, expect size of (batch_size, 1, n_samples)"
         
         # Prevent silent broadcasting errors
@@ -81,14 +84,13 @@ class DualityHQOperator:
         """
         total_samples = torch.tensor(val.size(1), dtype=torch.int64, device=val.device)
         log_mean_exp = torch.logsumexp(val, dim=1) - torch.log(total_samples)
-        if torch.isnan(log_mean_exp).any() or torch.isinf(log_mean_exp).any():
-            raise ValueError(f'Numerical instability in inner_expectation, max: {log_mean_exp.max()}, min: {log_mean_exp.min()}')
+        self._check_numerical_stability(log_mean_exp, "inner_expectation")
         
         return log_mean_exp # (batch_size)
     
     def outer_expectation(self):
         """
-        This is not required as we assume that reference returns come from one probability distribution, so there is no mixture weights to calculate the expectation.
+        Replay buffer sample is already an approximation for the outer expectation.
         """
         pass
     
@@ -150,11 +152,15 @@ class DualObjective(nn.Module):
         
         self.softplus = nn.Softplus()
     
-    def forward(self, lamda:torch.Tensor):
+    def _compute_hq_components(self, lamda:torch.Tensor) -> tuple:
         lamda_plus = self.softplus(lamda) #(batch_size)
         cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
         cij = self.duality_operator.compute_cij(self.prior_reward, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
         inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size)
+        return lamda_plus, inner_exp
+    
+    def forward(self, lamda:torch.Tensor):
+        lamda_plus, inner_exp = self._compute_hq_components(lamda)
         hq_value = self.duality_operator.hq_value(lamda_plus, inner_exp) #(batch_size)
         return hq_value
 
@@ -177,6 +183,11 @@ class OptimizeLamda:
         self.step_size = step_size
         self.gamma = gamma
     
+    def _build_optimizer_and_scheduler(self, params:list):
+        optimizer = torch.optim.Adam(params, lr=self.lr)
+        scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
+        return optimizer, scheduler
+    
     def optimize(self, lamda_from_buffer: torch.Tensor, lamda_mask: torch.Tensor, optimizer=None):
         batch_size = lamda_from_buffer.shape[0]
         
@@ -189,8 +200,7 @@ class OptimizeLamda:
         
         # Per-parameter optimizer groups
         optim_input = [{'params': [p]} for p in lamda]
-        optimizer = torch.optim.Adam(optim_input, lr=self.lr)
-        scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
+        optimizer, scheduler = self._build_optimizer_and_scheduler(optim_input)
         
         # Boolean mask (torch, same device)
         lamda_opt = lamda_mask.clone()
@@ -276,10 +286,7 @@ class SharedLambdaDualObjective(DualObjective):
         Outputs:
             hq_value: Scalar HQ value representing the batch-level empirical dual objective.
         """
-        lamda_plus = self.softplus(lamda)
-        cost = self.duality_operator.compute_cost(self.reference_r, self.prior_r) #(batch_size, n_samples)
-        cij = self.duality_operator.compute_cij(self.prior_reward, self.q_max, self.not_terminal, lamda_plus, cost) #(batch_size, n_samples)
-        inner_exp = self.duality_operator.inner_expectation(cij) #(batch_size,)
+        lamda_plus, inner_exp = self._compute_hq_components(lamda)
         mean_inner_exp = inner_exp[self.mask].mean() #scalar — valid samples only
         return self.duality_operator.hq_value(lamda_plus, mean_inner_exp) #scalar
 
@@ -291,7 +298,7 @@ class SharedLambdaOptimizer(OptimizeLamda):
     Convergence: stops when the change in loss between iterations falls below loss_tol.
     """
     
-    def __init__(self, dual_objective:DualObjective, lr:float, max_iter:int, step_size:int, gamma:float, loss_tol:float=1e-6):
+    def __init__(self, dual_objective:SharedLambdaDualObjective, lr:float, max_iter:int, step_size:int, gamma:float, loss_tol:float=1e-6):
         super().__init__(dual_objective, lr, max_iter, step_size, gamma)
         self.loss_tol = loss_tol
     
@@ -305,8 +312,7 @@ class SharedLambdaOptimizer(OptimizeLamda):
             iter_count: Number of iterations taken.
         """
         lamda = nn.Parameter(lamda_from_buffer.clone().detach(), requires_grad=True)
-        optimizer = torch.optim.Adam([{'params': [lamda]}], lr=self.lr)
-        scheduler = LagrangianLambdaScheduler(optimizer, step_size=self.step_size, gamma=self.gamma, init_lr=self.lr)
+        optimizer, scheduler = self._build_optimizer_and_scheduler([{'params': [lamda]}])
         
         prev_loss = None
         iter_count = 0
@@ -347,12 +353,8 @@ def hq_opt_shared_lambda(duality_operator:DualityHQOperator, reference_r:torch.T
     opt = SharedLambdaOptimizer(dual_obj, lr=lr, max_iter=max_iter, step_size=step_size, gamma=gamma, loss_tol=loss_tol)
     lamda_star, n_iter = opt.optimize(lamda_from_buffer, optimizer=optimizer)
     
-    softplus_fn = nn.Softplus()
     with torch.no_grad():
-        lamda_plus = softplus_fn(lamda_star) #scalar
-        cost = duality_operator.compute_cost(reference_r, prior_r) #(batch_size, n_samples)
-        cij = duality_operator.compute_cij(prior_reward, q_max, not_terminal, lamda_plus, cost) #(batch_size, n_samples)
-        inner_exp = duality_operator.inner_expectation(cij) #(batch_size,)
+        lamda_plus, inner_exp = dual_obj._compute_hq_components(lamda_star)
         hq_values = duality_operator.hq_value(lamda_plus, inner_exp) #(batch_size,)
     
     return hq_values, lamda_star, n_iter

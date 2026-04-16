@@ -128,12 +128,15 @@ def plot_rolling_sortino(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, b
     plt.tight_layout()
     return fig
 
-def plot_return_distribution(agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None) -> plt.Figure:
+def plot_return_distribution(agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None, is_log_scale:bool=False) -> plt.Figure:
     """Histogram of daily log returns with skew and excess kurtosis annotation."""
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.hist(agent_log_returns, bins=50, density=True, alpha=0.6, label='Agent')
     if benchmark_log_returns is not None:
         ax.hist(benchmark_log_returns, bins=50, density=True, alpha=0.5, label='Benchmark')
+    
+    if is_log_scale:
+        ax.set_yscale('log')
     
     skew_val = stats.skew(agent_log_returns)
     kurt_val = stats.kurtosis(agent_log_returns)  # excess kurtosis

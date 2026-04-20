@@ -4,39 +4,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 
-ANNUAL_WINDOW=252
+from .metrics import *
 
-def _compute_wealth(log_returns:np.ndarray) -> np.ndarray:
-    return np.exp(np.concatenate([[0.0], np.cumsum(log_returns)]))
-
-def _compute_drawdown(wealth:np.ndarray) -> np.ndarray:
-    running_peak = np.maximum.accumulate(wealth)
-    return (wealth - running_peak) / running_peak
-
-def _compute_rolling_sharpe(log_returns:np.ndarray, window:int=252) -> np.ndarray:
-    """Annualised rolling Sharpe (rf=0). NaN for first window-1 points."""
-    s = pd.Series(log_returns)
-    
-    roll_mean = s.rolling(window).mean()
-    annualized_mean = roll_mean * ANNUAL_WINDOW
-    roll_std = s.rolling(window).std()
-    annualized_std = roll_std * np.sqrt(ANNUAL_WINDOW)
-    
-    return (annualized_mean / annualized_std).values
-
-def _compute_rolling_sortino(log_returns:np.ndarray, window:int=252) -> np.ndarray:
-    """Annualised rolling Sortino (rf=0). NaN for first window-1 points."""
-    s = pd.Series(log_returns)
-    
-    roll_mean = s.rolling(window).mean()
-    annualized_mean = roll_mean * ANNUAL_WINDOW
-
-    neg_sq = s.clip(upper=0)**2
-    rolling_avg = neg_sq.rolling(window).mean()
-    roll_downside_dev = np.sqrt(rolling_avg)
-    annualized_downside_dev = roll_downside_dev * np.sqrt(ANNUAL_WINDOW)
-    
-    return (annualized_mean / annualized_downside_dev).values
+# Set matplotlib style
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['axes.spines.top'] = False
+plt.rcParams['axes.spines.right'] = False
 
 def _prepend_date(dates:pd.DatetimeIndex) -> pd.DatetimeIndex:
     """Prepend one calendar day before the first date (anchor for starting wealth = 1.0)."""
@@ -44,13 +19,13 @@ def _prepend_date(dates:pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 def plot_wealth(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None) -> plt.Figure:
     """Wealth index chart starting at 1.0 (agent vs optional benchmark)."""
-    agent_wealth = _compute_wealth(agent_log_returns)
+    agent_wealth = compute_wealth(agent_log_returns)
     wealth_dates = _prepend_date(dates)
     
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(wealth_dates, agent_wealth, label='Agent', linewidth=1.2)
     if benchmark_log_returns is not None:
-        ax.plot(wealth_dates, _compute_wealth(benchmark_log_returns),
+        ax.plot(wealth_dates, compute_wealth(benchmark_log_returns),
                 label='Benchmark', linewidth=1.2, alpha=0.8)
     
     ax.set_title('Wealth Over Time')
@@ -62,15 +37,15 @@ def plot_wealth(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, benchmark_
 
 def plot_drawdown(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None) -> plt.Figure:
     """Drawdown from running peak."""
-    agent_dd = _compute_drawdown(_compute_wealth(agent_log_returns))
+    agent_dd = compute_drawdown(compute_wealth(agent_log_returns))
     wealth_dates = _prepend_date(dates)
-
+    
     fig, ax = plt.subplots(figsize=(12, 4))
     
     ax.fill_between(wealth_dates, agent_dd, 0, alpha=0.4, label='Agent')
     ax.plot(wealth_dates, agent_dd, linewidth=0.8)
     if benchmark_log_returns is not None:
-        bm_dd = _compute_drawdown(_compute_wealth(benchmark_log_returns))
+        bm_dd = compute_drawdown(compute_wealth(benchmark_log_returns))
         ax.fill_between(wealth_dates, bm_dd, 0, alpha=0.3, label='Benchmark')
         ax.plot(wealth_dates, bm_dd, linewidth=0.8)
     
@@ -102,10 +77,10 @@ def plot_monthly_returns(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray) -
 
 def plot_rolling_sharpe(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None, window:int=252) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(dates, _compute_rolling_sharpe(agent_log_returns, window),
+    ax.plot(dates, compute_rolling_sharpe(agent_log_returns, window),
             label='Agent', linewidth=1.0)
     if benchmark_log_returns is not None:
-        ax.plot(dates, _compute_rolling_sharpe(benchmark_log_returns, window),
+        ax.plot(dates, compute_rolling_sharpe(benchmark_log_returns, window),
                 label='Benchmark', linewidth=1.0, alpha=0.8)
     
     ax.set_title(f'Rolling {window}-Day Sharpe Ratio')
@@ -116,10 +91,10 @@ def plot_rolling_sharpe(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, be
 
 def plot_rolling_sortino(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None, window:int=252) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(dates, _compute_rolling_sortino(agent_log_returns, window),
+    ax.plot(dates, compute_rolling_sortino(agent_log_returns, window),
             label='Agent', linewidth=1.0)
     if benchmark_log_returns is not None:
-        ax.plot(dates, _compute_rolling_sortino(benchmark_log_returns, window),
+        ax.plot(dates, compute_rolling_sortino(benchmark_log_returns, window),
                 label='Benchmark', linewidth=1.0, alpha=0.8)
     
     ax.set_title(f'Rolling {window}-Day Sortino Ratio')
@@ -130,7 +105,7 @@ def plot_rolling_sortino(dates:pd.DatetimeIndex, agent_log_returns:np.ndarray, b
 
 def plot_return_distribution(agent_log_returns:np.ndarray, benchmark_log_returns:np.ndarray=None, is_log_scale:bool=False) -> plt.Figure:
     """Histogram of daily log returns with skew and excess kurtosis annotation."""
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(10, 8))
     ax.hist(agent_log_returns, bins=50, density=True, alpha=0.6, label='Agent')
     if benchmark_log_returns is not None:
         ax.hist(benchmark_log_returns, bins=50, density=True, alpha=0.5, label='Benchmark')
@@ -139,7 +114,7 @@ def plot_return_distribution(agent_log_returns:np.ndarray, benchmark_log_returns
         ax.set_yscale('log')
     
     skew_val = stats.skew(agent_log_returns)
-    kurt_val = stats.kurtosis(agent_log_returns)  # excess kurtosis
+    kurt_val = stats.kurtosis(agent_log_returns)
     textstr = f'Skew:     {skew_val:+.3f}\nKurtosis: {kurt_val:+.3f}'
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.7)
     ax.text(0.97, 0.95, textstr, transform=ax.transAxes, ha='right',
@@ -152,7 +127,7 @@ def plot_return_distribution(agent_log_returns:np.ndarray, benchmark_log_returns
     plt.tight_layout()
     return fig
 
-def plot_position(dates: pd.DatetimeIndex, positions:np.ndarray) -> plt.Figure:
+def plot_position(dates:pd.DatetimeIndex, positions:np.ndarray) -> plt.Figure:
     """Portfolio allocation weight over time."""
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(dates, positions, linewidth=0.7, alpha=0.85)
@@ -163,4 +138,56 @@ def plot_position(dates: pd.DatetimeIndex, positions:np.ndarray) -> plt.Figure:
     ax.set_ylim([-1.15, 1.15])
     plt.tight_layout()
     
+    return fig
+
+def plot_wealth_multi(wealth_dates:pd.DatetimeIndex, agent_mean:np.ndarray, agent_q25:np.ndarray, agent_q75:np.ndarray, bm_wealth:np.ndarray) -> plt.Figure:
+    """Wealth chart for multiple runs showing mean and interquartile range."""
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(wealth_dates, agent_mean, label='Agent (mean)', linewidth=1.2)
+    ax.fill_between(wealth_dates, agent_q25, agent_q75, alpha=0.3, label='Q25-Q75')
+    ax.plot(wealth_dates, bm_wealth, label='Buy & Hold', linewidth=1.2, alpha=0.8)
+    
+    ax.set_title('Wealth Over Time — All Runs')
+    ax.set_ylabel('Wealth (start = 1.0)')
+    ax.legend()
+    plt.tight_layout()
+    return fig
+
+def plot_drawdown_multi(wealth_dates:pd.DatetimeIndex, mean_wealth:np.ndarray, bm_wealth:np.ndarray) -> plt.Figure:
+    """Drawdown chart from pre-computed mean agent and benchmark wealth."""
+    agent_dd = compute_drawdown(mean_wealth)
+    bm_dd = compute_drawdown(bm_wealth)
+    
+    fig, ax = plt.subplots(figsize=(14, 4))
+    ax.fill_between(wealth_dates, agent_dd, 0, alpha=0.4, label='Agent (mean)')
+    ax.plot(wealth_dates, agent_dd, linewidth=0.8)
+    ax.fill_between(wealth_dates, bm_dd, 0, alpha=0.3, label='Buy & Hold')
+    ax.plot(wealth_dates, bm_dd, linewidth=0.8)
+    
+    ax.set_title('Drawdown Over Time (Mean Agent)')
+    ax.set_ylabel('Drawdown')
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y * 100:.0f}%'))
+    ax.legend()
+    plt.tight_layout()
+    return fig
+
+def plot_metrics_bars(all_agent_metrics:list, bm_metrics:dict, nrows:int=2, ncols:int=3) -> plt.Figure:
+    """Bar chart with one bar per run plus a Buy & Hold bar for each metric."""
+    metric_names = list(bm_metrics.keys())
+    n_runs = len(all_agent_metrics)
+    labels = [f'Run {i + 1}' for i in range(n_runs)] + ['B&H']
+    colors = ['steelblue'] * n_runs + ['darkorange']
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, nrows*3.5))
+    axes = axes.flatten()
+    for i, metric in enumerate(metric_names):
+        ax = axes[i]
+        vals = [m[metric] for m in all_agent_metrics] + [bm_metrics[metric]]
+        ax.bar(labels, vals, color=colors)
+        ax.set_title(metric, fontsize=9)
+        ax.tick_params(labelsize=7)
+        ax.tick_params(axis='x', rotation=45)
+        
+    plt.suptitle('Metrics Comparison: All Runs vs Buy & Hold', fontsize=11)
+    plt.tight_layout()
     return fig

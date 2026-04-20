@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pandas as pd
@@ -6,16 +7,40 @@ from src.agents.dqn import QFunc
 from src.data.price_data import YahooFinance
 from src.utils.config import Config
 
+RUNS_FOLDER = './runs'
+
+class RunsRepository:
+    def __init__(self, runs_folder:str=RUNS_FOLDER):
+        self.runs_folder = runs_folder
+        
+    def get_model_names(self) -> list:
+        if not os.path.isdir(self.runs_folder):
+            return []
+        return sorted([f for f in os.listdir(self.runs_folder) if os.path.isdir(os.path.join(self.runs_folder, f))])
+        
+    def get_runtime_names(self, model_name:str) -> list:
+        model_path = os.path.join(self.runs_folder, model_name)
+        return sorted([f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))])
+        
+    def get_checkpoint_files(self, model_name:str, runtime_name:str) -> list:
+        ckpt_dir = os.path.join(self.runs_folder, model_name, runtime_name, 'checkpoints')
+        if not os.path.isdir(ckpt_dir):
+            return []
+        return sorted(os.path.join(ckpt_dir, f) for f in os.listdir(ckpt_dir) if f.endswith('.pt'))
+        
+    def get_config_path(self, model_name:str, runtime_name:str) -> str:
+        return os.path.join(self.runs_folder, model_name, runtime_name, 'config.json')
+
 def load_ticker_data(ticker:str, start_date:str, end_date:str) -> pd.DataFrame:
     """
-    Download and prepare price data for a ticker. Call this once and pass the
-    result to run_backtest to avoid re-downloading for each model.
+    Download and prepare price data for a ticker. 
+    Call this once and pass the result to run_backtest to avoid re-downloading for each model.
     
     Returns a DataFrame with a 'log_return' column and a date index, first date is dropped due to NaN log return.
     """
     yf = YahooFinance(symbol=ticker, start_date=start_date, end_date=end_date)
     df = yf.pipeline().dropna(subset=['log_return'])
-    return df.iloc[1:]  # Drop first row with NaN log return
+    return df.iloc[1:]
 
 def load_qfunc_from_checkpoint(config_path:str, checkpoint_path:str) -> dict:
     """
@@ -25,7 +50,7 @@ def load_qfunc_from_checkpoint(config_path:str, checkpoint_path:str) -> dict:
     Inputs:
     - config_path : path to the configuration file
     - checkpoint_path : path to the checkpoint file
-
+    
     Outputs:
         A dictionary containing:
         - 'qfunc': QFunc in eval mode (on CPU)
@@ -87,8 +112,7 @@ def run_backtest(qfunc, action_values, rf_rate:float, trans_cost:float, df:pd.Da
             raise ValueError("Provide either `df` or all of `ticker`, `start_date`, `end_date`.")
         df = load_ticker_data(ticker, start_date, end_date)
     
-    # Calendar days between consecutive dates, expressed in years
-    dt = df.index.to_series().diff().dt.days.div(365).values  # NaN at index 0
+    dt = df.index.to_series().diff().dt.days.div(365).values
     
     log_return_col = df.columns.get_loc('log_return')
     

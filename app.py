@@ -8,6 +8,9 @@ from src.evaluation.backtest import *
 from src.evaluation.metrics import *
 from src.evaluation.plots import *
 
+MIN_DATE = date(1995, 1, 1)
+MAX_DATE = date(2026, 3, 31)
+
 @st.cache_data
 def load_ticker(ticker:str, dataset_start:str, dataset_end:str) -> pd.DataFrame:
     return load_ticker_data(ticker, dataset_start, dataset_end)
@@ -67,13 +70,13 @@ class SelectParams:
         return ticker, trans_cost/100, rf_rate/100
     
     def _select_dataset_dates(self) -> tuple[str, str, str, str]:
-        dataset_start = st.date_input('Dataset Start', value=date(1995, 1, 1))
-        dataset_end = st.date_input('Dataset End', value=date(2025, 12, 31))
+        dataset_start = st.date_input('Dataset Start', value=MIN_DATE, min_value=MIN_DATE, max_value=MAX_DATE)
+        dataset_end = st.date_input('Dataset End', value=MAX_DATE, min_value=MIN_DATE, max_value=MAX_DATE)
         return dataset_start, dataset_end
     
     def _select_view_dates(self, dataset_start:date, dataset_end:date) -> tuple[str, str]:
-        view_start = st.date_input('View Start', value=dataset_start)
-        view_end = st.date_input('View End', value=dataset_end)
+        view_start = st.date_input('View Start', value=dataset_start, min_value=MIN_DATE, max_value=MAX_DATE)
+        view_end = st.date_input('View End', value=dataset_end, min_value=MIN_DATE, max_value=MAX_DATE)
         return view_start, view_end
 
 class SingleRunPage(SelectParams):

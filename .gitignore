@@ -1,2 +1,4 @@
 *.pyc
 /runs
+/dashboard_result
+CLAUDE.md

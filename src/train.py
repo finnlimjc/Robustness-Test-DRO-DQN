@@ -5,7 +5,7 @@ from src.env import PortfolioEnv
 from src.agents.portfolio import PORDQN
 from src.utils.writer import PORDQNProgressWriter
 
-def train_agent(env:PortfolioEnv, agent:PORDQN, current_epoch:int, n_epochs:int, writer:PORDQNProgressWriter=None, checkpoint_interval:int=5000) -> list[np.ndarray]:
+def train_agent(env:PortfolioEnv, agent:PORDQN, current_epoch:int, n_epochs:int, writer:PORDQNProgressWriter=None, checkpoint_interval:int=None) -> list[np.ndarray]:
     if current_epoch < 0:
         raise ValueError(f"Invalid value for current_epoch: {current_epoch}. Current episode should start from 1.")
     if current_epoch > n_epochs:
@@ -30,7 +30,8 @@ def train_agent(env:PortfolioEnv, agent:PORDQN, current_epoch:int, n_epochs:int,
                     action_idx = agent.agent_step(reward=reward, observation=next_state, info=info)
                 
                 if writer is not None:
-                    writer.save_model_params_periodically(epoch, agent, checkpoint_interval=checkpoint_interval)
+                    if checkpoint_interval is not None:
+                        writer.save_model_params_periodically(epoch, agent, checkpoint_interval=checkpoint_interval)
                     
                     transaction_cost = info['transaction_cost']
                     writer.log_actual_rewards(reward, transaction_cost, current_step=agent.training_controller.steps)
